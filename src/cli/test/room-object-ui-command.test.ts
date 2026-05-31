@@ -219,6 +219,7 @@ void test("object event mutations reject invalid event descriptor format", async
 
     assert.equal(eventAddResult.exitCode, 1);
     assert.match(eventAddResult.stderr, /Expected format: category:event \(for example Step:Begin\)\./u);
+    assert.doesNotMatch(eventAddResult.stderr, /parseObjectEventDescriptor/u);
 });
 
 void test("room layer update planned leaf emits apply mode when write is requested", async () => {
@@ -319,6 +320,7 @@ void test("room instance mutations reject non-numeric coordinates", async () => 
 
     assert.equal(addResult.exitCode, 1);
     assert.match(addResult.stderr, /Invalid x coordinate "left"\. Expected a finite numeric value\./u);
+    assert.doesNotMatch(addResult.stderr, /parseCoordinateArgument/u);
 
     const updateResult = await runCliTestCommand({
         argv: ["room", "instance", "update", "rm_main", "111", "320", "top", "--json"]
@@ -326,6 +328,7 @@ void test("room instance mutations reject non-numeric coordinates", async () => 
 
     assert.equal(updateResult.exitCode, 1);
     assert.match(updateResult.stderr, /Invalid y coordinate "top"\. Expected a finite numeric value\./u);
+    assert.doesNotMatch(updateResult.stderr, /parseCoordinateArgument/u);
 });
 
 void test("room instance add/update/delete mutate room metadata through CLI write mode", async () => {

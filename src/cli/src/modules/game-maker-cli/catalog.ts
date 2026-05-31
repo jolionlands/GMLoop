@@ -26,6 +26,8 @@ type GameMakerCliCommandExecutionOptions = Readonly<{
     toolPath: string | null;
 }>;
 
+const GAME_MAKER_CLI_TEXT_COMMAND_TIMEOUT_MS = 5000;
+
 type GameMakerCliMcpProbeResult = Readonly<{
     serverName: string;
     serverVersion: string;
@@ -646,6 +648,16 @@ async function executeGameMakerCliCommand(
 
         let stdout = "";
         let stderr = "";
+        let settled = false;
+        const timeout = setTimeout(() => {
+            settled = true;
+            childProcess.kill("SIGTERM");
+            reject(
+                new Error(
+                    `${invocation.displayName} did not respond within ${String(GAME_MAKER_CLI_TEXT_COMMAND_TIMEOUT_MS)}ms.`
+                )
+            );
+        }, GAME_MAKER_CLI_TEXT_COMMAND_TIMEOUT_MS);
 
         childProcess.stdout.setEncoding("utf8");
         childProcess.stdout.on("data", (chunk: string) => {
@@ -657,8 +669,22 @@ async function executeGameMakerCliCommand(
             stderr += chunk;
         });
 
-        childProcess.on("error", reject);
+        childProcess.on("error", (error) => {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
+            clearTimeout(timeout);
+            reject(error);
+        });
         childProcess.on("close", (code, signal) => {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
+            clearTimeout(timeout);
             if (signal !== null) {
                 reject(new Error(`gm-cli terminated with signal ${signal}.`));
                 return;

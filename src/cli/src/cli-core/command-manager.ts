@@ -131,7 +131,8 @@ class CliCommandManager {
             if (this._handleCommanderError(error)) {
                 return;
             }
-            throw error;
+
+            this._handleCommandError(error, this._activeCommand ?? this._program);
         }
     }
 

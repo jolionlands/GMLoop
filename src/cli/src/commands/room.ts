@@ -3,6 +3,7 @@ import { Semantic } from "@gmloop/semantic";
 import { Command } from "commander";
 
 import { applyStandardCommandOptions } from "../cli-core/command-standard-options.js";
+import { CliUsageError } from "../cli-core/errors.js";
 import { createConfigOption, createPathOption, createWriteOption } from "../cli-core/shared-command-options.js";
 import {
     ensureProjectGraphIndex,
@@ -35,7 +36,7 @@ function printRoomPayload(payload: unknown): void {
 function parseCoordinateArgument(value: string, argumentName: "x" | "y"): number {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) {
-        throw new TypeError(`Invalid ${argumentName} coordinate "${value}". Expected a finite numeric value.`);
+        throw new CliUsageError(`Invalid ${argumentName} coordinate "${value}". Expected a finite numeric value.`);
     }
     return parsed;
 }

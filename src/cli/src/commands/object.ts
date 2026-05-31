@@ -3,6 +3,7 @@ import { Semantic } from "@gmloop/semantic";
 import { Command } from "commander";
 
 import { applyStandardCommandOptions } from "../cli-core/command-standard-options.js";
+import { CliUsageError } from "../cli-core/errors.js";
 import { createConfigOption, createPathOption, createWriteOption } from "../cli-core/shared-command-options.js";
 import {
     ensureProjectGraphIndex,
@@ -98,7 +99,7 @@ function parseObjectEventDescriptor(eventDescriptor: string): ObjectEventDescrip
     const category = rawCategory?.trim() ?? "";
     const descriptor = rawDescriptorSegments.join(":").trim();
     if (category.length === 0 || descriptor.length === 0) {
-        throw new Error(
+        throw new CliUsageError(
             `Invalid event descriptor "${eventDescriptor}". Expected format: category:event (for example Step:Begin).`
         );
     }

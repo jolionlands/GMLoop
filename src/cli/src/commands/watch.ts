@@ -571,7 +571,8 @@ async function performInitialScan(
                 quiet: true,
                 cachedAst,
                 cachedSymbols: cached?.symbols,
-                cachedReferences: cached?.references
+                cachedReferences: cached?.references,
+                deliverRuntimePatch: false
             });
 
             // Track symbols and references
@@ -715,6 +716,70 @@ function logWatchStartup(
     }
 }
 
+async function stopServerAfterStartupFailure(
+    label: string,
+    server: { stop: () => Promise<void> } | null,
+    unknownServerStopErrorMessage: string
+): Promise<void> {
+    if (server === null) {
+        return;
+    }
+
+    try {
+        await server.stop();
+    } catch (stopError) {
+        const stopMessage = getErrorMessage(stopError, {
+            fallback: unknownServerStopErrorMessage
+        });
+        console.error(`Failed to stop ${label} during cleanup: ${stopMessage}`);
+    }
+}
+
+async function startWatchRuntimeServerAfterPatchServers({
+    runtimeRoot,
+    runtimeServerStarter,
+    statusServerController,
+    unknownServerStopErrorMessage,
+    verbose,
+    websocketServerController
+}: Readonly<{
+    runtimeRoot: string | null;
+    runtimeServerStarter: typeof startRuntimeStaticServer;
+    statusServerController: StatusServerHandle | null;
+    unknownServerStopErrorMessage: string;
+    verbose: boolean;
+    websocketServerController: PatchWebSocketServer | null;
+}>): Promise<RuntimeStaticServerInstance | null> {
+    if (runtimeRoot === null) {
+        return null;
+    }
+
+    try {
+        const runtimeServerController = await runtimeServerStarter({
+            runtimeRoot,
+            verbose
+        });
+
+        console.log(`Runtime static server ready at ${runtimeServerController.url}`);
+        return runtimeServerController;
+    } catch (error) {
+        const message = getErrorMessage(error, {
+            fallback: "Unknown runtime server error"
+        });
+        const formattedError = formatCliError(new Error(`Failed to start runtime static server: ${message}`));
+        console.error(formattedError);
+
+        await stopServerAfterStartupFailure(
+            "WebSocket server",
+            websocketServerController,
+            unknownServerStopErrorMessage
+        );
+        await stopServerAfterStartupFailure("status server", statusServerController, unknownServerStopErrorMessage);
+
+        process.exit(1);
+    }
+}
+
 /**
  * Executes the watch command.
  *
@@ -828,9 +893,9 @@ export async function runWatchCommand(targetPath: string, options: WatchCommandO
         transientEmptyFileReadRetryDelayMs
     };
 
-    let runtimeServerController: RuntimeStaticServerInstance | null = null;
     let websocketServerController: PatchWebSocketServer | null = null;
     let statusServerController: StatusServerHandle | null = null;
+    let runtimeServerController: RuntimeStaticServerInstance | null = null;
 
     if (shouldServeRuntime) {
         const runtimeSource = await runtimeResolver({
@@ -845,15 +910,6 @@ export async function runWatchCommand(targetPath: string, options: WatchCommandO
         if (verbose && !quiet) {
             console.log(`Using HTML5 runtime from ${runtimeDescriptor(runtimeSource)}`);
         }
-
-        runtimeServerController = await runtimeServerStarter({
-            runtimeRoot: runtimeSource.root,
-            verbose
-        });
-
-        runtimeContext.server = runtimeServerController;
-
-        console.log(`Runtime static server ready at ${runtimeServerController.url}`);
     } else if (verbose && !quiet) {
         console.log("Runtime static server disabled.");
     }
@@ -892,17 +948,6 @@ export async function runWatchCommand(targetPath: string, options: WatchCommandO
             const formattedError = formatCliError(new Error(`Failed to start WebSocket server: ${message}`));
             console.error(formattedError);
 
-            if (runtimeServerController) {
-                try {
-                    await runtimeServerController.stop();
-                } catch (stopError) {
-                    const stopMessage = getErrorMessage(stopError, {
-                        fallback: unknownServerStopErrorMessage
-                    });
-                    console.error(`Failed to stop runtime server during cleanup: ${stopMessage}`);
-                }
-            }
-
             process.exit(1);
         }
     } else if (verbose && !quiet) {
@@ -935,6 +980,7 @@ export async function runWatchCommand(targetPath: string, options: WatchCommandO
                             filePath: path.relative(normalizedPath, e.filePath),
                             error: e.error
                         })),
+                        runtimeUrl: runtimeServerController?.url ?? null,
                         websocketClients: runtimeContext.websocketServer?.getClientCount() ?? 0,
                         scanComplete: runtimeContext.scanComplete,
                         avgHotReloadLatencyMs: latencyStats?.avg,
@@ -954,17 +1000,6 @@ export async function runWatchCommand(targetPath: string, options: WatchCommandO
             const formattedError = formatCliError(new Error(`Failed to start status server: ${message}`));
             console.error(formattedError);
 
-            if (runtimeServerController) {
-                try {
-                    await runtimeServerController.stop();
-                } catch (stopError) {
-                    const stopMessage = getErrorMessage(stopError, {
-                        fallback: unknownServerStopErrorMessage
-                    });
-                    console.error(`Failed to stop runtime server during cleanup: ${stopMessage}`);
-                }
-            }
-
             if (websocketServerController) {
                 try {
                     await websocketServerController.stop();
@@ -981,6 +1016,15 @@ export async function runWatchCommand(targetPath: string, options: WatchCommandO
     } else if (verbose && !quiet) {
         console.log("Status server disabled.");
     }
+
+    runtimeServerController = await startWatchRuntimeServerAfterPatchServers({
+        runtimeRoot: shouldServeRuntime ? runtimeContext.root : null,
+        runtimeServerStarter,
+        statusServerController,
+        unknownServerStopErrorMessage,
+        verbose,
+        websocketServerController
+    });
 
     logWatchStartup(normalizedPath, extensionSet, polling, pollingInterval, verbose, quiet);
 
@@ -1366,14 +1410,20 @@ async function handleFileChange(
                 resolvedFileStats = await readFileStats(filePath);
             }
 
-            if (resolvedFileStats) {
-                const lastModified = runtimeContext.fileSnapshots.get(filePath);
-                if (lastModified !== undefined && resolvedFileStats.mtimeMs <= lastModified) {
-                    if (verbose && !quiet) {
-                        console.log("  ↳ Skipping unchanged file");
-                    }
-                    return;
+            if (!resolvedFileStats) {
+                if (verbose && !quiet) {
+                    console.log("  ↳ File removed before change event could be processed");
                 }
+                cleanupRemovedFile(runtimeContext, filePath, verbose, quiet);
+                return;
+            }
+
+            const lastModified = runtimeContext.fileSnapshots.get(filePath);
+            if (lastModified !== undefined && resolvedFileStats.mtimeMs <= lastModified) {
+                if (verbose && !quiet) {
+                    console.log("  ↳ Skipping unchanged file");
+                }
+                return;
             }
         }
 
@@ -2065,7 +2115,12 @@ async function addScriptNamesFromFile(
 
     try {
         const content = await readFile(filePath, "utf8");
-        const parser = new Parser.GMLParser(content, {});
+        const parser = new Parser.GMLParser(content, {
+            getComments: false,
+            getLocations: true,
+            simplifyLocations: true,
+            attachFunctionDocComments: false
+        });
         const ast = parser.parse();
         // Extract both symbols and references from the AST in a single traversal.
         // This saves a second walk during transpileFile when the cache is reused.

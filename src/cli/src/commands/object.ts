@@ -7,6 +7,7 @@ import { CliUsageError } from "../cli-core/errors.js";
 import { createConfigOption, createPathOption, createWriteOption } from "../cli-core/shared-command-options.js";
 import {
     ensureProjectGraphIndex,
+    filterGraphIndexResultsByKind,
     printProjectPayload,
     resolveCommandProjectContext,
     type SharedProjectContextOptions
@@ -120,13 +121,16 @@ export function createObjectCommand(): Command {
     list.action(async function objectListAction() {
         const options = this.opts<SharedProjectContextOptions>();
         const context = await ensureProjectGraphIndex(options);
-        const payload = Semantic.searchGraphIndex({
-            databasePath: options.databasePath,
-            projectConfig: context.projectConfig,
-            projectRoot: context.projectRoot,
-            query: "",
-            toolsetRoot: options.toolsetRoot
-        }).results.filter((entry) => entry.kind === "object");
+        const payload = filterGraphIndexResultsByKind(
+            Semantic.searchGraphIndex({
+                databasePath: options.databasePath,
+                projectConfig: context.projectConfig,
+                projectRoot: context.projectRoot,
+                query: "",
+                toolsetRoot: options.toolsetRoot
+            }).results,
+            "object"
+        );
         printObjectPayload({ command: "object list", ok: true, payload });
     });
 
@@ -138,15 +142,16 @@ export function createObjectCommand(): Command {
     inspect.action(async function objectInspectAction(objectNameOrId: string) {
         const options = this.opts<SharedProjectContextOptions>();
         const context = await ensureProjectGraphIndex(options);
+        const results = Semantic.searchGraphIndex({
+            databasePath: options.databasePath,
+            projectConfig: context.projectConfig,
+            projectRoot: context.projectRoot,
+            query: objectNameOrId,
+            toolsetRoot: options.toolsetRoot
+        }).results;
         const resolvedId = objectNameOrId.includes("::")
             ? objectNameOrId
-            : (Semantic.searchGraphIndex({
-                  databasePath: options.databasePath,
-                  projectConfig: context.projectConfig,
-                  projectRoot: context.projectRoot,
-                  query: objectNameOrId,
-                  toolsetRoot: options.toolsetRoot
-              }).results.find((entry) => entry.kind === "object")?.id ?? null);
+            : (filterGraphIndexResultsByKind(results, "object")[0]?.id ?? null);
         const payload =
             resolvedId === null
                 ? null
@@ -176,13 +181,16 @@ export function createObjectCommand(): Command {
     validate.action(async function objectValidateAction() {
         const options = this.opts<SharedProjectContextOptions>();
         const context = await ensureProjectGraphIndex(options);
-        const objects = Semantic.searchGraphIndex({
-            databasePath: options.databasePath,
-            projectConfig: context.projectConfig,
-            projectRoot: context.projectRoot,
-            query: "",
-            toolsetRoot: options.toolsetRoot
-        }).results.filter((entry) => entry.kind === "object");
+        const objects = filterGraphIndexResultsByKind(
+            Semantic.searchGraphIndex({
+                databasePath: options.databasePath,
+                projectConfig: context.projectConfig,
+                projectRoot: context.projectRoot,
+                query: "",
+                toolsetRoot: options.toolsetRoot
+            }).results,
+            "object"
+        );
         printObjectPayload({
             command: "object validate",
             ok: true,

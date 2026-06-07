@@ -16,6 +16,7 @@ import {
     GRAPH_UI_EVENT_CYCLE_LABEL_MODE,
     GRAPH_UI_EVENT_NAVIGATE_PAGE,
     GRAPH_UI_EVENT_RESET_DEFAULTS,
+    GRAPH_UI_EVENT_SET_CONFIG_VIEW,
     GRAPH_UI_EVENT_SET_DOCS_VIEW,
     GRAPH_UI_EVENT_SET_SEARCH_QUERY,
     GRAPH_UI_EVENT_TOGGLE_GRAPH_VIEW,
@@ -24,11 +25,15 @@ import {
     GRAPH_UI_EVENT_TRIGGER_START_LIVE_RELOAD,
     GRAPH_UI_EVENT_TRIGGER_STOP_LIVE_RELOAD,
     type GraphUiNavigatePageDetail,
+    type GraphUiSetConfigViewDetail,
     type GraphUiSetDocsViewDetail,
     type GraphUiSetSearchQueryDetail
 } from "./events.js";
 import { LightDomLitElement } from "./light-dom-lit-element.js";
 import type { GmStatusChipStatus } from "./primitives/gm-status-chip.js";
+
+const CLASS_BTN_CHIP_ACTIVE = "gm-btn--chip active";
+const CLASS_BTN_CHIP = "gm-btn--chip";
 
 const LIVE_RELOAD_PAGE: GraphVisualizationUiPage = "live-reload";
 
@@ -94,7 +99,7 @@ function resolveFixStatusChipStatus(
             : state.fixStatus;
 
     if (effectiveStatus === "success") {
-        return "running";
+        return "success";
     }
     if (effectiveStatus === "error") {
         return "error";
@@ -104,7 +109,7 @@ function resolveFixStatusChipStatus(
 
 function resolveFixStatusSummary(state: GraphVisualizationUiState): string {
     if (state.isFixPending) {
-        return "Applying fixes to your project.";
+        return "Applying fixes to your project (this may take a while).";
     }
 
     if (state.fixStatus === "success") {
@@ -125,6 +130,11 @@ function resolveDocsStatusSummary(model: GraphVisualizationUiModel, state: Graph
         : state.activeDocsView === "mcp"
           ? docsPanelContent.mcpMetaText
           : docsPanelContent.rulesMetaText;
+}
+
+function resolveConfigStatusSummary(model: GraphVisualizationUiModel): string {
+    const configPath = model.projectConfigurationCatalog?.gmloop.configPath;
+    return configPath ? `Config path: ${configPath}` : "Config path: Not found";
 }
 
 /**
@@ -275,6 +285,16 @@ export class GmGraphToolbar extends LightDomLitElement {
                 bubbles: true,
                 composed: true,
                 detail: { docsView }
+            })
+        );
+    }
+
+    #emitConfigView(configView: GraphVisualizationUiState["activeConfigView"]): void {
+        this.dispatchEvent(
+            new CustomEvent<GraphUiSetConfigViewDetail>(GRAPH_UI_EVENT_SET_CONFIG_VIEW, {
+                bubbles: true,
+                composed: true,
+                detail: { configView }
             })
         );
     }
@@ -443,7 +463,7 @@ export class GmGraphToolbar extends LightDomLitElement {
                 <button
                     id="docs-view-cli"
                     aria-pressed=${this.state.activeDocsView === "cli"}
-                    class=${this.state.activeDocsView === "cli" ? "gm-btn--chip active" : "gm-btn--chip"}
+                    class=${this.state.activeDocsView === "cli" ? CLASS_BTN_CHIP_ACTIVE : CLASS_BTN_CHIP}
                     @click=${() => this.#emitDocsView("cli")}
                 >
                     CLI
@@ -451,7 +471,7 @@ export class GmGraphToolbar extends LightDomLitElement {
                 <button
                     id="docs-view-mcp"
                     aria-pressed=${this.state.activeDocsView === "mcp"}
-                    class=${this.state.activeDocsView === "mcp" ? "gm-btn--chip active" : "gm-btn--chip"}
+                    class=${this.state.activeDocsView === "mcp" ? CLASS_BTN_CHIP_ACTIVE : CLASS_BTN_CHIP}
                     @click=${() => this.#emitDocsView("mcp")}
                 >
                     MCP
@@ -459,7 +479,7 @@ export class GmGraphToolbar extends LightDomLitElement {
                 <button
                     id="docs-view-rules"
                     aria-pressed=${this.state.activeDocsView === "rules"}
-                    class=${this.state.activeDocsView === "rules" ? "gm-btn--chip active" : "gm-btn--chip"}
+                    class=${this.state.activeDocsView === "rules" ? CLASS_BTN_CHIP_ACTIVE : CLASS_BTN_CHIP}
                     @click=${() => this.#emitDocsView("rules")}
                 >
                     Rules
@@ -487,6 +507,35 @@ export class GmGraphToolbar extends LightDomLitElement {
                     </button>
                 </div>
                 <p id="docs-search-summary" class="docs-search-summary" aria-live="polite">${searchResultSummary}</p>
+            </div>
+        `;
+    }
+
+    #renderConfigControls() {
+        if (!this.state) {
+            return null;
+        }
+
+        return html`
+            <div class="gm-view-selector" role="group" aria-label="Configuration view selector">
+                <button
+                    id="config-view-rendered"
+                    type="button"
+                    aria-pressed=${this.state.activeConfigView === "rendered"}
+                    class=${this.state.activeConfigView === "rendered" ? CLASS_BTN_CHIP_ACTIVE : CLASS_BTN_CHIP}
+                    @click=${() => this.#emitConfigView("rendered")}
+                >
+                    Rendered
+                </button>
+                <button
+                    id="config-view-raw"
+                    type="button"
+                    aria-pressed=${this.state.activeConfigView === "raw"}
+                    class=${this.state.activeConfigView === "raw" ? CLASS_BTN_CHIP_ACTIVE : CLASS_BTN_CHIP}
+                    @click=${() => this.#emitConfigView("raw")}
+                >
+                    Raw JSON
+                </button>
             </div>
         `;
     }
@@ -645,7 +694,7 @@ export class GmGraphToolbar extends LightDomLitElement {
                 : this.state.activePage === "docs"
                   ? resolveDocsStatusSummary(this.model, this.state)
                   : this.state.activePage === "config"
-                    ? "Review the project settings and tool options currently in use."
+                    ? resolveConfigStatusSummary(this.model)
                     : this.state.activePage === "fix"
                       ? resolveFixStatusSummary(this.state)
                       : this.state.activePage === "playground"
@@ -662,6 +711,7 @@ export class GmGraphToolbar extends LightDomLitElement {
             this.state.activePage === LIVE_RELOAD_PAGE ? "toolbar-live-reload-controls" : "";
         const fixControlsClassName = this.state.activePage === "fix" ? "toolbar-fix-controls" : "";
         const docsControlsClassName = this.state.activePage === "docs" ? "toolbar-docs-controls" : "";
+        const configControlsClassName = this.state.activePage === "config" ? "toolbar-config-controls" : "";
 
         return html`
             <div id="page-toolbar" class="page-toolbar">
@@ -673,6 +723,9 @@ export class GmGraphToolbar extends LightDomLitElement {
                         </div>
                         <span id="toolbar-subheading">${subheading}</span>
                     </div>
+                    ${this.state.activePage === "config"
+                        ? html`<div class=${configControlsClassName}>${this.#renderConfigControls()}</div>`
+                        : null}
                     ${this.state.activePage === "fix"
                         ? html`<div class=${fixControlsClassName}>${this.#renderFixControls()}</div>`
                         : null}

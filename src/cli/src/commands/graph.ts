@@ -33,7 +33,10 @@ import {
 import { createRefactorBridges } from "../modules/refactor/bridge-factory.js";
 import { startGraphVisualizationServer } from "../modules/server/graph-visualization-server.js";
 import { openUrlInDefaultBrowser } from "../modules/server/open-url.js";
-import { createGraphVisualizationProjectConfigurationCatalog } from "../modules/ui/index.js";
+import {
+    createDefaultGmloopProjectConfig,
+    createGraphVisualizationProjectConfigurationCatalog
+} from "../modules/ui/index.js";
 import { findRepoRootSync } from "../shared/repo-root.js";
 import { discoverProjectRoot, resolveExplicitWorkflowTargetPath } from "../workflow/project-root.js";
 import {
@@ -82,7 +85,14 @@ async function runGraphVisualizationFixWorkflow(
     onLogLine: ((logLine: string) => void) | null = null
 ): Promise<Readonly<{ logLines: ReadonlyArray<string> }>> {
     const cliEntryPath = fileURLToPath(new URL("../../index.js", import.meta.url));
-    const args = [cliEntryPath, "fix", "--write", "--path", context.projectRoot];
+    const args = [
+        "--disable-warning=ExperimentalWarning",
+        cliEntryPath,
+        "fix",
+        "--write",
+        "--path",
+        context.projectRoot
+    ];
     if (configPath) {
         args.push("--config", configPath);
     }
@@ -1170,6 +1180,9 @@ async function runGraphDoctorAction(options: GraphCommandSharedOptions): Promise
 async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Promise<void> {
     const initialSelectedPath = resolveExplicitWorkflowTargetPath(options.path);
     let activeContext: GraphResolutionContext | null = null;
+    const updateActiveContext = (context: GraphResolutionContext | null): void => {
+        activeContext = context;
+    };
     let activeSelectedPaths = initialSelectedPath ? [initialSelectedPath] : [];
     let activeSource: GraphServeSource = options.path ? "cli-path" : "working-directory";
     let activeVisualizationPayload = createEmptyGraphVisualizationData();
@@ -1255,7 +1268,9 @@ async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Prom
     async function refreshActiveVisualizationArtifacts(context: GraphResolutionContext | null): Promise<void> {
         if (context === null) {
             activeVisualizationPayload = createEmptyGraphVisualizationData();
-            activeProjectConfigurationCatalog = null;
+            activeProjectConfigurationCatalog = await createGraphVisualizationProjectConfigurationCatalog(null, {
+                config: options.config
+            });
             return;
         }
 
@@ -1365,6 +1380,7 @@ async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Prom
             const childProcess = spawn(
                 process.execPath,
                 [
+                    "--disable-warning=ExperimentalWarning",
                     cliEntrypointPath,
                     ...createGraphVisualizationLiveReloadDevCommandArgs(startupContext.projectRoot, startupOptions)
                 ],
@@ -1487,6 +1503,7 @@ async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Prom
             uiWatchRebuildPending = false;
             try {
                 await runUiWorkspaceTypeBuildForServe();
+                UI.clearGraphVisualizationBundleCache();
                 markServeRevisionChanged();
                 console.log(`[graph visualize] UI source changed. Reload revision: ${String(activeServeRevision)}`);
             } catch (error) {
@@ -1580,8 +1597,7 @@ async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Prom
                     }
 
                     activeContext = null;
-                    activeVisualizationPayload = createEmptyGraphVisualizationData();
-                    activeProjectConfigurationCatalog = null;
+                    await refreshActiveVisualizationArtifacts(null);
                     activeStartupState = createGraphVisualizationServeErrorState(
                         "Failed to load the initial project.",
                         Core.getErrorMessage(error, { fallback: "Unknown graph visualization startup error" })
@@ -1663,6 +1679,20 @@ async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Prom
             void openNextPendingActiveProjectStatePath();
         };
 
+        const writeActiveProjectConfig = async (config: Readonly<Record<string, unknown>>) => {
+            const projectRoot = activeContext?.projectRoot ?? process.cwd();
+            const configPath = path.join(projectRoot, "gmloop.json");
+            await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+            const nextContext = await resolveGraphContext({
+                ...options,
+                path: projectRoot
+            });
+            updateActiveContext(nextContext);
+            await refreshActiveVisualizationArtifacts(nextContext);
+            markServeRevisionChanged();
+            return Object.freeze({ changed: true });
+        };
+
         const server = await startGraphVisualizationServer({
             getUiRevision: () => activeServeRevision,
             regenerate: async () => {
@@ -1675,6 +1705,12 @@ async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Prom
                 const nextPayloadString = safeStringifyVisualizationPayload();
                 markServeRevisionChanged();
                 return Object.freeze({ changed: previousPayloadString !== nextPayloadString });
+            },
+            createConfig: () => {
+                return writeActiveProjectConfig(createDefaultGmloopProjectConfig());
+            },
+            saveConfig: ({ config }) => {
+                return writeActiveProjectConfig(config);
             },
             openProjectTargets: async ({ path: selectedPath }) => {
                 const nextPathFromPicker =

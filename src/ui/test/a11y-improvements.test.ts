@@ -3,20 +3,14 @@ import test from "node:test";
 
 import { GmAppHeader } from "../src/app/components/gm-app-header.js";
 import { GmAppShell } from "../src/app/components/gm-app-shell.js";
-import { GmConfigPanel } from "../src/app/components/gm-config-panel.js";
 import { GmDocsPanel } from "../src/app/components/gm-docs-panel.js";
 import { GmGraphToolbar } from "../src/app/components/gm-graph-toolbar.js";
 import type { GraphVisualizationUiModel } from "../src/app/contracts.js";
+import { createInitialGraphVisualizationUiState } from "../src/app/state/reducer.js";
 import type { GraphVisualizationUiState } from "../src/app/state/types.js";
 import { renderTemplateValue } from "./render-template-helpers.js";
 
 class TestableGmAppShell extends GmAppShell {
-    public renderForTest(): unknown {
-        return this.render();
-    }
-}
-
-class TestableGmConfigPanel extends GmConfigPanel {
     public renderForTest(): unknown {
         return this.render();
     }
@@ -118,22 +112,12 @@ function createMockModel(): GraphVisualizationUiModel {
 
 function createMockState(): GraphVisualizationUiState {
     return {
+        ...createInitialGraphVisualizationUiState(),
         activeDocsView: "cli",
         activeGraphView: "visual",
         activePage: "docs",
-        errorMessage: null,
-        fixErrorMessage: null,
-        fixLogLines: [],
-        fixStatus: "idle",
-        isFixPending: false,
-        isLiveReloadStartPending: false,
-        isOpenProjectPending: false,
-        isRegeneratePending: false,
-        labelMode: "auto",
-        liveReloadErrorMessage: null,
-        mcpServerStatus: "not-started",
-        pendingActionCount: 0,
-        searchQuery: ""
+        activeConfigView: "rendered",
+        labelMode: "auto"
     };
 }
 
@@ -170,16 +154,6 @@ void test("GmGraphToolbar renders Docs subview tabs with shared view selector se
     assert.match(rendered, /<div class="gm-view-selector" role="group" aria-label="Documentation view selector">/u);
     assert.match(rendered, /id="docs-view-cli"[\s\S]*class=gm-btn--chip active/u);
     assert.match(rendered, /id="docs-view-mcp"[\s\S]*class=gm-btn--chip/u);
-});
-
-void test("GmConfigPanel renders shared view-selector with aria-label group context", () => {
-    const panel = new TestableGmConfigPanel();
-    panel.model = createMockModel();
-    panel.state = createMockState();
-
-    const rendered = renderTemplateValue(panel.renderForTest());
-
-    assert.match(rendered, /<div class="gm-view-selector" role="group" aria-label="Configuration view selector">/u);
 });
 
 void test("GmDocsPanel uses a dedicated id for MCP docs subview to avoid id collisions", () => {

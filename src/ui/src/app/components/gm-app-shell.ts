@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html } from "lit";
 
 import {
     createNoopGraphVisualizationUiCallbacks,
@@ -21,17 +21,24 @@ import {
 } from "../state/url-state.js";
 import { EventBusManager } from "./event-bus-mixin.js";
 import {
+    GRAPH_UI_EVENT_CLEAR_PAGE_ERROR,
     GRAPH_UI_EVENT_CYCLE_LABEL_MODE,
     GRAPH_UI_EVENT_NAVIGATE_PAGE,
     GRAPH_UI_EVENT_RESET_DEFAULTS,
+    GRAPH_UI_EVENT_SAVE_CONFIG,
+    GRAPH_UI_EVENT_SET_CONFIG_VIEW,
     GRAPH_UI_EVENT_SET_DOCS_VIEW,
     GRAPH_UI_EVENT_SET_SEARCH_QUERY,
     GRAPH_UI_EVENT_TOGGLE_GRAPH_VIEW,
+    GRAPH_UI_EVENT_TRIGGER_CREATE_CONFIG,
     GRAPH_UI_EVENT_TRIGGER_FIX,
     GRAPH_UI_EVENT_TRIGGER_OPEN_PROJECT,
     GRAPH_UI_EVENT_TRIGGER_REGENERATE,
     GRAPH_UI_EVENT_TRIGGER_START_LIVE_RELOAD,
-    GRAPH_UI_EVENT_TRIGGER_STOP_LIVE_RELOAD
+    GRAPH_UI_EVENT_TRIGGER_STOP_LIVE_RELOAD,
+    type GraphUiClearPageErrorDetail,
+    type GraphUiSaveConfigDetail,
+    type GraphUiSetConfigViewDetail
 } from "./events.js";
 import { LifecycleParticipantsController } from "./lifecycle-participants-controller.js";
 import { LightDomLitElement } from "./light-dom-lit-element.js";
@@ -102,6 +109,13 @@ export class GmAppShell extends LightDomLitElement {
         });
     };
 
+    #onSetConfigView = (eventValue: Event): void => {
+        this.#store.dispatch({
+            configView: (eventValue as CustomEvent<GraphUiSetConfigViewDetail>).detail.configView,
+            type: "set-config-view"
+        });
+    };
+
     #onSetSearchQuery = (eventValue: Event): void => {
         if (!this.model) {
             return;
@@ -142,7 +156,7 @@ export class GmAppShell extends LightDomLitElement {
     };
 
     #onTriggerOpenProject = (): void => {
-        void this.#runHostActionWithPendingState("set-open-project-pending", this.callbacks.onOpenProject);
+        void this.#runHostActionWithPendingState("set-open-project-pending", "graph", this.callbacks.onOpenProject);
     };
 
     #onTriggerRegenerate = (): void => {
@@ -150,7 +164,26 @@ export class GmAppShell extends LightDomLitElement {
             return;
         }
 
-        void this.#runHostActionWithPendingState("set-regenerate-pending", this.callbacks.onRegenerate);
+        void this.#runHostActionWithPendingState("set-regenerate-pending", "graph", this.callbacks.onRegenerate);
+    };
+
+    #onTriggerCreateConfig = (): void => {
+        if (!this.model || !hasLoadedGraphProject(this.model) || !this.callbacks.onCreateConfig) {
+            return;
+        }
+
+        void this.#runHostActionWithPendingState("set-regenerate-pending", "config", this.callbacks.onCreateConfig);
+    };
+
+    #onSaveConfig = (eventValue: Event): void => {
+        if (!this.model || !hasLoadedGraphProject(this.model)) {
+            return;
+        }
+
+        const config = (eventValue as CustomEvent<GraphUiSaveConfigDetail>).detail.config;
+        void this.#runHostActionWithPendingState("set-config-save-pending", "config", () =>
+            this.callbacks.onSaveConfig(config)
+        );
     };
 
     #onTriggerFix = (): void => {
@@ -173,6 +206,11 @@ export class GmAppShell extends LightDomLitElement {
         this.#store.dispatch({ type: "clear-error" });
     };
 
+    #onClearPageError = (event: Event): void => {
+        const customEvent = event as CustomEvent<GraphUiClearPageErrorDetail>;
+        this.#store.dispatch({ page: customEvent.detail.page, type: "clear-page-error" });
+    };
+
     public constructor() {
         super();
         this.#store = new GraphVisualizationUiStore(readGraphVisualizationUiStateFromCurrentUrl());
@@ -187,9 +225,13 @@ export class GmAppShell extends LightDomLitElement {
             { event: GRAPH_UI_EVENT_RESET_DEFAULTS, handler: this.#onResetDefaults },
             { event: GRAPH_UI_EVENT_TRIGGER_OPEN_PROJECT, handler: this.#onTriggerOpenProject },
             { event: GRAPH_UI_EVENT_TRIGGER_REGENERATE, handler: this.#onTriggerRegenerate },
+            { event: GRAPH_UI_EVENT_TRIGGER_CREATE_CONFIG, handler: this.#onTriggerCreateConfig },
+            { event: GRAPH_UI_EVENT_SAVE_CONFIG, handler: this.#onSaveConfig },
+            { event: GRAPH_UI_EVENT_SET_CONFIG_VIEW, handler: this.#onSetConfigView },
             { event: GRAPH_UI_EVENT_TRIGGER_FIX, handler: this.#onTriggerFix },
             { event: GRAPH_UI_EVENT_TRIGGER_START_LIVE_RELOAD, handler: this.#onTriggerStartLiveReload },
             { event: GRAPH_UI_EVENT_TRIGGER_STOP_LIVE_RELOAD, handler: this.#onTriggerStopLiveReload },
+            { event: GRAPH_UI_EVENT_CLEAR_PAGE_ERROR, handler: this.#onClearPageError },
             { event: "dismiss", handler: this.#onDismissErrorBanner }
         ]);
 
@@ -207,16 +249,20 @@ export class GmAppShell extends LightDomLitElement {
     }
 
     async #runHostActionWithPendingState(
-        pendingType: "set-open-project-pending" | "set-regenerate-pending",
-        hostAction: GraphVisualizationUiCallbacks["onOpenProject"] | GraphVisualizationUiCallbacks["onRegenerate"]
+        pendingType: "set-config-save-pending" | "set-open-project-pending" | "set-regenerate-pending",
+        page: GraphVisualizationUiPage,
+        hostAction:
+            | GraphVisualizationUiCallbacks["onOpenProject"]
+            | GraphVisualizationUiCallbacks["onRegenerate"]
+            | NonNullable<GraphVisualizationUiCallbacks["onCreateConfig"]>
     ): Promise<void> {
         try {
             this.#store.dispatch({ pending: true, type: pendingType });
-            this.#store.dispatch({ errorMessage: null, type: "set-error" });
+            this.#store.dispatch({ errorMessage: null, page, type: "set-page-error" });
             await hostAction();
         } catch (error) {
             const message = getUiErrorMessage(error, "Unknown error");
-            this.#store.dispatch({ errorMessage: message, type: "set-error" });
+            this.#store.dispatch({ errorMessage: message, page, type: "set-page-error" });
         } finally {
             this.#store.dispatch({ pending: false, type: pendingType });
         }
@@ -317,12 +363,6 @@ export class GmAppShell extends LightDomLitElement {
             <div id="app-shell">
                 <gm-app-header .model=${this.model} .state=${this.#state}></gm-app-header>
                 <gm-page-toolbar .model=${this.model} .state=${this.#state}></gm-page-toolbar>
-                ${this.#state.errorMessage
-                    ? html`<gm-error-banner
-                          .message=${this.#state.errorMessage}
-                          @gm-error-banner-dismiss=${this.#onDismissErrorBanner}
-                      ></gm-error-banner>`
-                    : nothing}
                 <main>
                     <gm-graph-panel .model=${this.model} .state=${this.#state}></gm-graph-panel>
                     <gm-playground-panel .model=${this.model} .state=${this.#state}></gm-playground-panel>

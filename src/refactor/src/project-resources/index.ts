@@ -16,6 +16,7 @@ export type {
     AddProjectResourceRequest,
     DuplicateProjectResourceRequest,
     MoveProjectResourceRequest,
+    ProjectManifestEntry,
     ProjectResourceMutationResult,
     RemoveProjectResourceRequest,
     RenameProjectResourceRequest
@@ -23,9 +24,12 @@ export type {
 export {
     addProjectResource,
     duplicateProjectResource,
+    getManifestResources,
     moveProjectResource,
+    readProjectMetadataDocument,
     removeProjectResource,
-    renameProjectResource
+    renameProjectResource,
+    resolveProjectManifestFile
 } from "./project-resource-operations.js";
 export type {
     AddRoomInstanceRequest,

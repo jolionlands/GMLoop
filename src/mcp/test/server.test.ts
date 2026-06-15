@@ -8,7 +8,9 @@ import {
     createGmloopMcpServer,
     extractGraphById,
     listGmloopMcpToolCatalogEntries,
-    listGmloopMcpToolNames
+    listGmloopMcpToolNames,
+    parseCliJsonStdout,
+    parseOptionalCliJsonStdout
 } from "../src/server/index.js";
 
 const WORKSPACE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -126,6 +128,50 @@ void test("MCP tool catalog exposes object event update from the CLI command cat
     assert.equal(writeField.valueType, "boolean");
 });
 
+void test("MCP tool catalog exposes room camera update from the CLI command catalog", () => {
+    const catalog = listGmloopMcpToolCatalogEntries();
+    const updateTool = catalog.find((entry) => entry.toolName === "gmloop_room_camera_update");
+    assert.ok(updateTool, "gmloop_room_camera_update must appear in the MCP tool catalog");
+    assert.equal(updateTool.commandDisplayName, "room camera update");
+
+    const fieldNames = new Set(updateTool.fields.map((field) => field.name));
+    assert.ok(fieldNames.has("cwd"), "room camera update must include cwd field");
+    assert.ok(fieldNames.has("room"), "room camera update must include room argument");
+    assert.ok(fieldNames.has("camera-id"), "room camera update must include camera-id argument");
+    assert.ok(fieldNames.has("x"), "room camera update must include x argument");
+    assert.ok(fieldNames.has("y"), "room camera update must include y argument");
+    assert.ok(fieldNames.has("width"), "room camera update must include width argument");
+    assert.ok(fieldNames.has("height"), "room camera update must include height argument");
+    assert.ok(fieldNames.has("--write"), "room camera update must include --write option");
+    assert.ok(fieldNames.has("--path"), "room camera update must include --path option");
+    assert.ok(fieldNames.has("--json"), "room camera update must include --json option");
+
+    const writeField = updateTool.fields.find((field) => field.name === "--write");
+    assert.ok(writeField);
+    assert.equal(writeField.kind, "option");
+    assert.equal(writeField.valueType, "boolean");
+});
+
+void test("MCP tool catalog exposes object event delete from the CLI command catalog", () => {
+    const catalog = listGmloopMcpToolCatalogEntries();
+    const deleteTool = catalog.find((entry) => entry.toolName === "gmloop_object_event_delete");
+    assert.ok(deleteTool, "gmloop_object_event_delete must appear in the MCP tool catalog");
+    assert.equal(deleteTool.commandDisplayName, "object event delete");
+
+    const fieldNames = new Set(deleteTool.fields.map((field) => field.name));
+    assert.ok(fieldNames.has("cwd"), "object event delete must include cwd field");
+    assert.ok(fieldNames.has("object"), "object event delete must include object argument");
+    assert.ok(fieldNames.has("event"), "object event delete must include event argument");
+    assert.ok(fieldNames.has("--write"), "object event delete must include --write option");
+    assert.ok(fieldNames.has("--path"), "object event delete must include --path option");
+    assert.ok(fieldNames.has("--json"), "object event delete must include --json option");
+
+    const writeField = deleteTool.fields.find((field) => field.name === "--write");
+    assert.ok(writeField);
+    assert.equal(writeField.kind, "option");
+    assert.equal(writeField.valueType, "boolean");
+});
+
 void test("MCP tool catalog exposes test case create with correct arguments and options", () => {
     const catalog = listGmloopMcpToolCatalogEntries();
     const createTool = catalog.find((entry) => entry.toolName === "gmloop_test_case_create");
@@ -190,6 +236,22 @@ void test("MCP tool catalog exports live tool fields derived from the CLI catalo
     assert.ok(formatTool.fields.some((field) => field.name === "--path"));
 });
 
+void test("parseOptionalCliJsonStdout gives MCP tools a stable parsed JSON payload", () => {
+    const payload = parseOptionalCliJsonStdout(
+        '{"command":"object event update","ok":true,"payload":{"dryRun":true}}\n',
+        ["object", "event", "update", "obj_player", "Create:0", "x = 1;", "--json"]
+    ) as { command: string; ok: boolean; payload: { dryRun: boolean } };
+
+    assert.equal(payload.command, "object event update");
+    assert.equal(payload.ok, true);
+    assert.equal(payload.payload.dryRun, true);
+    assert.equal(
+        parseOptionalCliJsonStdout("object event update exited with code 0\n", ["object", "event", "update"]),
+        null
+    );
+    assert.equal(parseOptionalCliJsonStdout("\n", ["object", "event", "update"]), null);
+});
+
 void test("extractGraphById collapses the 3-segment chain into a single call", () => {
     // Simulates the shape returned by `graph doctor --json`.
     const envelope = {
@@ -216,4 +278,34 @@ void test("extractGraphById collapses the 3-segment chain into a single call", (
 
     // Empty graphs array returns null.
     assert.equal(extractGraphById({ payload: { graphs: [] } }, "project"), null);
+});
+
+void test("parseCliJsonStdout returns the parsed payload for valid JSON", () => {
+    const payload = parseCliJsonStdout<{ ok: true }>('{"ok":true}\n', ["graph", "doctor", "--json"]);
+
+    assert.deepEqual(payload, { ok: true });
+});
+
+void test("parseCliJsonStdout decorates syntax errors with the originating command", () => {
+    assert.throws(
+        () => parseCliJsonStdout("not-json", ["graph", "doctor", "--json"]),
+        (error: unknown) => {
+            assert.ok(error instanceof SyntaxError);
+            assert.equal(error.name, "JsonParseError");
+            assert.match(error.message, /CLI JSON output for graph doctor --json/u);
+            return true;
+        }
+    );
+});
+
+void test("parseCliJsonStdout throws when the CLI emits an empty stdout", () => {
+    assert.throws(
+        () => parseCliJsonStdout("", ["graph", "doctor", "--json"]),
+        (error: unknown) => {
+            assert.ok(error instanceof SyntaxError);
+            assert.equal(error.name, "JsonParseError");
+            assert.match(error.message, /CLI JSON output for graph doctor --json/u);
+            return true;
+        }
+    );
 });

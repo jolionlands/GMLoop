@@ -140,9 +140,89 @@ export type Range = { start: number; end: number };
 const { createEnumeratedOptionHelpers } = Core;
 
 /**
- * Allowed naming case styles for naming-convention policy rules.
+ * Enumerated constants for naming case styles accepted by
+ * naming-convention policy rules.
+ *
+ * Naming case styles are the canonical identifier casing used by the refactor
+ * engine's naming policy. Centralising the valid values as a frozen constant
+ * object removes raw string literals (e.g. `"camel"`, `"lower_snake"`) from
+ * the dispatch logic in `formatNamingCaseStyle` and gives callers a single
+ * source of truth for runtime validation. The string values are deliberately
+ * preserved as the wire format used in user-authored config so existing
+ * policies keep working without translation.
+ *
+ * @example
+ * // Use typed constants instead of raw strings
+ * if (rule.caseStyle === NamingCaseStyle.LOWER_SNAKE) { ... }
+ *
+ * // Validate runtime strings
+ * const style = requireNamingCaseStyle(rawInput, "naming rule");
  */
-export type NamingCaseStyle = "lower" | "upper" | "camel" | "lower_snake" | "upper_snake" | "pascal";
+export const NamingCaseStyle = Object.freeze({
+    LOWER: "lower",
+    UPPER: "upper",
+    CAMEL: "camel",
+    LOWER_SNAKE: "lower_snake",
+    UPPER_SNAKE: "upper_snake",
+    PASCAL: "pascal"
+} as const);
+
+/**
+ * Allowed naming case styles for naming-convention policy rules.
+ *
+ * Derived from {@link NamingCaseStyle} so the union stays in lock-step with
+ * the runtime constant map; adding a new style only requires updating the
+ * `NamingCaseStyle` object.
+ */
+export type NamingCaseStyle = (typeof NamingCaseStyle)[keyof typeof NamingCaseStyle];
+
+const namingCaseStyleHelpers = createEnumHelpers(NamingCaseStyle, "naming case style");
+
+/**
+ * Check whether a value is a valid naming case style.
+ *
+ * @param value - Candidate value to test
+ * @returns True if value matches a known NamingCaseStyle constant
+ *
+ * @example
+ * if (isNamingCaseStyle(rawString)) {
+ *   // Safe to use as NamingCaseStyle
+ * }
+ */
+export function isNamingCaseStyle(value: unknown): value is NamingCaseStyle {
+    return namingCaseStyleHelpers.is(value);
+}
+
+/**
+ * Parse and validate a naming case style string.
+ *
+ * @param value - Raw string to parse
+ * @returns Valid NamingCaseStyle or null if invalid
+ *
+ * @example
+ * const style = parseNamingCaseStyle(rawInput);
+ * if (style === null) {
+ *   // Handle invalid style
+ * }
+ */
+export function parseNamingCaseStyle(value: unknown): NamingCaseStyle | null {
+    return namingCaseStyleHelpers.parse(value);
+}
+
+/**
+ * Parse and validate a naming case style string, throwing on invalid input.
+ *
+ * @param value - Raw string to parse
+ * @param context - Optional context for error message
+ * @returns Valid NamingCaseStyle
+ * @throws {TypeError} If value is not a valid naming case style
+ *
+ * @example
+ * const style = requireNamingCaseStyle(rawInput, "naming rule caseStyle");
+ */
+export function requireNamingCaseStyle(value: unknown, context?: string): NamingCaseStyle {
+    return namingCaseStyleHelpers.require(value, context);
+}
 
 /**
  * Category keys that can be targeted by naming-convention policy rules.
@@ -266,7 +346,7 @@ export type ResolvedNamingConventionRules = Partial<Record<NamingCategory, Resol
  * @param typeName - Human-readable name for error messages
  * @returns Helper object with is, parse, and require methods
  */
-function createEnumHelpers<T extends Record<string, string>>(enumObj: T, typeName: string) {
+export function createEnumHelpers<T extends Record<string, string>>(enumObj: T, typeName: string) {
     type EnumValue = T[keyof T];
     const values = Object.values(enumObj);
     const validValues = values.join(", ");
@@ -513,6 +593,80 @@ export function parseOccurrenceKind(value: unknown): OccurrenceKindValue | null 
  */
 export function requireOccurrenceKind(value: unknown, context?: string): OccurrenceKindValue {
     return occurrenceKindHelpers.require(value, context);
+}
+
+/**
+ * Enumerated constants for refactor conflict severity levels.
+ *
+ * Severity is reported alongside each `ConflictEntry` so callers can decide
+ * whether to surface the issue as a hard failure, an advisory warning, or
+ * background context. This enum centralizes the valid severity strings,
+ * replacing raw literals (e.g. `"error"`, `"warning"`, `"info"`) that used to
+ * live inline on conflict records and were compared with `===` in branching
+ * logic. Using typed constants prevents typo-induced mismatches and gives
+ * callers a single source of truth for validation.
+ *
+ * @example
+ * // Use typed constants instead of raw strings
+ * conflicts.push({ type: ConflictType.LARGE_RENAME, severity: ConflictSeverity.WARNING, ... });
+ *
+ * // Validate runtime strings
+ * const severity = parseConflictSeverity(rawInput);
+ */
+export const ConflictSeverity = Object.freeze({
+    ERROR: "error",
+    WARNING: "warning",
+    INFO: "info"
+} as const);
+
+export type ConflictSeverityValue = (typeof ConflictSeverity)[keyof typeof ConflictSeverity];
+
+const conflictSeverityHelpers = createEnumHelpers(ConflictSeverity, "conflict severity");
+
+/**
+ * Check whether a value is a valid conflict severity.
+ *
+ * @param value - Candidate value to test
+ * @returns True if value matches a known ConflictSeverity constant
+ *
+ * @example
+ * if (isConflictSeverity(rawString)) {
+ *   // Safe to use as ConflictSeverityValue
+ * }
+ */
+export function isConflictSeverity(value: unknown): value is ConflictSeverityValue {
+    return conflictSeverityHelpers.is(value);
+}
+
+/**
+ * Parse and validate a conflict severity string.
+ *
+ * @param value - Raw string to parse
+ * @returns Valid ConflictSeverityValue or null if invalid
+ *
+ * @example
+ * const severity = parseConflictSeverity(conflict.severity);
+ * if (severity === null) {
+ *   // Handle unknown severity
+ * }
+ */
+export function parseConflictSeverity(value: unknown): ConflictSeverityValue | null {
+    return conflictSeverityHelpers.parse(value);
+}
+
+/**
+ * Parse and validate a conflict severity string, throwing on invalid input.
+ *
+ * @param value - Raw string to parse
+ * @param context - Optional context for error message
+ * @returns Valid ConflictSeverityValue
+ * @throws {TypeError} If value is not a valid conflict severity
+ *
+ * @example
+ * const severity = requireConflictSeverity(conflict.severity, "rename validation");
+ */
+export function requireConflictSeverity(value: unknown, context?: string): ConflictSeverityValue {
+    return conflictSeverityHelpers.require(value, context);
 }
 
 export * from "./types/index.js";

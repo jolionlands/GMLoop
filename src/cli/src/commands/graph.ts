@@ -8,10 +8,8 @@ import { fileURLToPath } from "node:url";
 import { Core } from "@gmloop/core";
 import { Format } from "@gmloop/format";
 import { Lint, listLintRuleCatalogEntries } from "@gmloop/lint";
-import { Parser } from "@gmloop/parser";
 import { Refactor, type RefactorCodemodId } from "@gmloop/refactor";
 import { Semantic } from "@gmloop/semantic";
-import { Transpiler } from "@gmloop/transpiler";
 import { UI } from "@gmloop/ui";
 import { Command, Option } from "commander";
 import { ESLint } from "eslint";
@@ -31,8 +29,11 @@ import {
     DEFAULT_LIVE_RELOAD_WEBSOCKET_PORT
 } from "../modules/live-reload/config.js";
 import { createRefactorBridges } from "../modules/refactor/bridge-factory.js";
-import { startGraphVisualizationServer } from "../modules/server/graph-visualization-server.js";
-import { openUrlInDefaultBrowser } from "../modules/server/open-url.js";
+import {
+    openUrlInDefaultBrowser,
+    startGraphVisualizationServer
+} from "../modules/server/graph-visualization-server.js";
+import { createGmlParserAdapter, createGmlTranspilerAdapter } from "../modules/transpilation/adapters.js";
 import {
     createDefaultGmloopProjectConfig,
     createGraphVisualizationProjectConfigurationCatalog
@@ -79,20 +80,20 @@ type GraphVisualizationExportResult = Readonly<{
     outputDirectory: string;
 }>;
 
-async function runGraphVisualizationFixWorkflow(
+type GraphVisualizationProjectWorkflow = (typeof UI.PROJECT_WORKFLOWS)[number];
+
+async function runGraphVisualizationProjectWorkflow(
     context: GraphResolutionContext,
     configPath: string | undefined,
+    workflow: GraphVisualizationProjectWorkflow,
     onLogLine: ((logLine: string) => void) | null = null
 ): Promise<Readonly<{ logLines: ReadonlyArray<string> }>> {
     const cliEntryPath = fileURLToPath(new URL("../../index.js", import.meta.url));
-    const args = [
-        "--disable-warning=ExperimentalWarning",
-        cliEntryPath,
-        "fix",
-        "--write",
-        "--path",
-        context.projectRoot
-    ];
+    const args = ["--disable-warning=ExperimentalWarning"];
+    if (workflow === "refactor") {
+        args.push("--max-old-space-size=16384");
+    }
+    args.push(cliEntryPath, ...createGraphVisualizationWorkflowArguments(workflow, context.projectRoot));
     if (configPath) {
         args.push("--config", configPath);
     }
@@ -127,6 +128,26 @@ async function runGraphVisualizationFixWorkflow(
     }
 
     return Object.freeze({ logLines: Object.freeze([...logLines]) });
+}
+
+function createGraphVisualizationWorkflowArguments(
+    workflow: GraphVisualizationProjectWorkflow,
+    projectRoot: string
+): ReadonlyArray<string> {
+    switch (workflow) {
+        case "fix": {
+            return ["fix", "--write", "--path", projectRoot];
+        }
+        case "format": {
+            return ["format", "--write", "--path", projectRoot, "--on-parse-error", "skip"];
+        }
+        case "lint": {
+            return ["lint", projectRoot, "--write", "--path", projectRoot, "--project-strict"];
+        }
+        case "refactor": {
+            return ["refactor", "codemod", projectRoot, "--write", "--path", projectRoot];
+        }
+    }
 }
 
 /**
@@ -1495,7 +1516,33 @@ async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Prom
     }
 
     async function runServeVisualizationMode(): Promise<void> {
-        const documentationCatalogs = createDocumentationCatalogs();
+        const repoRoot = findRepoRootSync(path.dirname(fileURLToPath(import.meta.url)));
+        const featherMetadataPath = path.resolve(repoRoot, "resources/feather-metadata.json");
+        let featherMetadataWatcher: FSWatcher | null = null;
+        if (existsSync(featherMetadataPath)) {
+            try {
+                featherMetadataWatcher = watch(featherMetadataPath, (eventType) => {
+                    if (eventType === "change") {
+                        Core.clearFeatherMetadataCache();
+                        void (async () => {
+                            try {
+                                await refreshActiveVisualizationArtifacts(activeContext);
+                                markServeRevisionChanged();
+                                console.log("[graph visualize] feather-metadata.json changed. Reloading UI...");
+                            } catch (error) {
+                                console.error(
+                                    `[graph visualize] Failed to refresh catalog on metadata change: ${Core.getErrorMessage(error)}`
+                                );
+                            }
+                        })();
+                    }
+                });
+            } catch (error) {
+                console.error(
+                    `[graph visualize] Failed to watch feather-metadata.json: ${Core.getErrorMessage(error)}`
+                );
+            }
+        }
         let uiWatchRebuildInProgress = false;
         let uiWatchRebuildPending = false;
 
@@ -1720,7 +1767,7 @@ async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Prom
                 }
                 return await openProjectTargetPath(nextPathFromPicker, "finder-open");
             },
-            runFix: async () => {
+            runFix: async ({ workflow }) => {
                 if (!activeContext) {
                     throw new Error("Open a GameMaker project before running fixes.");
                 }
@@ -1728,9 +1775,14 @@ async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Prom
                 activeFixProgressLogLines = [];
                 isFixWorkflowRunning = true;
                 try {
-                    const result = await runGraphVisualizationFixWorkflow(activeContext, options.config, (logLine) => {
-                        activeFixProgressLogLines.push(logLine);
-                    });
+                    const result = await runGraphVisualizationProjectWorkflow(
+                        activeContext,
+                        options.config,
+                        workflow,
+                        (logLine) => {
+                            activeFixProgressLogLines.push(logLine);
+                        }
+                    );
                     activeLastFixRun = Object.freeze({
                         logLines: result.logLines,
                         projectRoot: activeContext.projectRoot,
@@ -1767,8 +1819,8 @@ async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Prom
                 let error: string | null = null;
 
                 try {
-                    const gmlParser = new Parser.GMLParser(gml);
-                    const program = gmlParser.parse();
+                    const parseAdapter = createGmlParserAdapter();
+                    const program = parseAdapter(gml);
                     ast = JSON.stringify(
                         program,
                         (key, value) => {
@@ -1807,14 +1859,14 @@ async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Prom
                     }
 
                     if (transpileMode === "patch") {
-                        const transpiler = new Transpiler.GmlTranspiler();
+                        const transpiler = createGmlTranspilerAdapter();
                         const patch = transpiler.transpileScript({
                             sourceText: output,
                             symbolId: "playground-script"
                         });
                         output = patch.js_body;
                     } else if (transpileMode === "expression") {
-                        const transpiler = new Transpiler.GmlTranspiler();
+                        const transpiler = createGmlTranspilerAdapter();
                         output = transpiler.transpileExpression(output);
                     }
                 } catch (error_) {
@@ -1836,13 +1888,17 @@ async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Prom
                 markServeRevisionChanged();
             },
             renderBundle: async (isServerMode) => {
+                Core.clearFeatherMetadataCache();
+
                 const renderRevision = activeServeRevision;
                 if (isServerMode && activeServeBundleCache?.revision === renderRevision) {
                     return activeServeBundleCache.bundle;
                 }
 
+                const freshDocumentationCatalogs = createDocumentationCatalogs();
+
                 const bundle = await UI.renderGraphVisualizationBundle(exportVisualizationPayload(), {
-                    documentationCatalogs,
+                    documentationCatalogs: freshDocumentationCatalogs,
                     isServerMode,
                     lastFixRun: activeLastFixRun ?? undefined,
                     liveReload: activeLiveReloadSession.model ?? undefined,
@@ -1909,6 +1965,8 @@ async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Prom
             uiSourceWatcher = null;
             activeProjectStateWatcher?.stop();
             activeProjectStateWatcher = null;
+            featherMetadataWatcher?.close();
+            featherMetadataWatcher = null;
 
             void (async () => {
                 try {
@@ -1929,6 +1987,8 @@ async function runGraphVisualizeAction(options: GraphCommandSharedOptions): Prom
             uiSourceWatcher = null;
             activeProjectStateWatcher?.stop();
             activeProjectStateWatcher = null;
+            featherMetadataWatcher?.close();
+            featherMetadataWatcher = null;
             void stopLiveReloadChildProcess();
         });
     }
@@ -2089,6 +2149,7 @@ export function createGraphCommand(): Command {
 
 export const __graphCommandTest__ = Object.freeze({
     GRAPH_VISUALIZATION_LIVE_RELOAD_START_TIMEOUT_MS,
+    createGraphVisualizationWorkflowArguments,
     createGraphVisualizationLiveReloadDevCommandArgs,
     createGraphVisualizationLiveReloadModel,
     createReachableGraphVisualizationLiveReloadModel,

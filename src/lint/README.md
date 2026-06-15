@@ -41,22 +41,19 @@ This wires:
 
 `Lint.configs` exposes these immutable flat-config sets:
 
+- `all`: every `gml/*` and `feather/*` rule at its recommended level
 - `recommended`: all `gml/*` rules plus a conservative safe `feather/*` subset
 - `feather`: `feather/gm####` overlay rules from the feather manifest
 
-Example:
+Enable every lint rule with one config spread:
 
 ```js
 import * as LintWorkspace from "@gmloop/lint";
 
-export default [
-    ...LintWorkspace.Lint.configs.recommended,
-    ...LintWorkspace.Lint.configs.feather
-];
+export default [...LintWorkspace.Lint.configs.all];
 ```
 
-For a full "all rules enabled" config (including all `feather/*` rules), see:
-`docs/examples/example.eslint.all-rules.config.js`.
+The `all` config preserves each rule's recommended `"warn"` or `"error"` severity.
 
 ## Language Behavior
 
@@ -87,7 +84,7 @@ LintWorkspace.Lint;
 
 - `plugin`: ESLint plugin object for `gml/*` (`rules`, `languages`)
 - `featherPlugin`: ESLint plugin object for `feather/*` (`rules`)
-- `configs`: `recommended`, `feather`
+- `configs`: `all`, `recommended`, `feather`, `performance`
 - `ruleIds`: PascalCase map keys to canonical full IDs (`gml/...`, `feather/...`)
 - `services`: single-file-safe support values only; no project registries, project roots, or semantic indexes
 
@@ -97,7 +94,6 @@ Built-in `gml/*` rule short names:
 
 - `prefer-hoistable-loop-accessors` (includes former `prefer-loop-length-hoist` scenarios)
 - `prefer-loop-invariant-expressions`
-- `prefer-repeat-loops`
 - `prefer-struct-literal-assignments`
 - `prefer-array-push`
 - `prefer-compound-assignments`
@@ -106,8 +102,8 @@ Built-in `gml/*` rule short names:
 - `optimize-logical-flow`
 - `no-globalvar`
 - `no-empty-regions`
-- `no-legacy-api`
 - `no-scientific-notation`
+- `no-unary-plus-on-identifier`
 - `no-unnecessary-string-interpolation`
 - `remove-default-comments`
 - `normalize-banner-comments`
@@ -122,8 +118,6 @@ Built-in `gml/*` rule short names:
 - `prefer-string-interpolation`
 - `optimize-math-expressions`
 - `require-argument-separators`
-- `normalize-data-structure-accessors`
-- `require-trailing-optional-defaults`
 - `simplify-real-calls`
 
 `prefer-compound-assignments` rewrites safe self-assignment forms
@@ -152,17 +146,9 @@ comment-bearing statement spans.
 
 `remove-default-comments` removes default GameMaker placeholder and migration-banner comments.
 
-`no-legacy-api` reports deprecated built-ins and auto-fixes safe local direct
-renames, including deprecated replacements that were historically surfaced
-through Feather parity rules. Structural or project-wide migrations remain
-report-only and continue to belong in lint diagnostics or explicit refactor
-commands rather than unsafe autofixes.
-
 `normalize-banner-comments` canonicalizes decorative banner comments (line and block forms) and rewrites method-list `///` banner lines (outside of function declarations) to plain `//` comments.
 
 `normalize-doc-comments` canonicalizes doc tags/content within a single file, including removing `@param` separator hyphens (for example, `@param value - desc` to `@param value desc`). It synthesizes missing tags for declaration/assignment-style function docs. Constructors, including for inherited constructors (`function X(...) : Parent(...) constructor`). For struct/object literal property functions, the rule synthesizes docs, including `@returns`. Canonical ordering keeps non-param metadata tags before the param block, but preserves custom tags interleaved between `@param` lines when intentionally authored that way.
-
-`normalize-data-structure-accessors` only applies repairs when the syntax or surrounding code provides enough evidence. Multi-coordinate structured access is normalized to `[# ...]`, because grids are the only GameMaker data structure that support more than one coordinate. The rule intentionally does not guess list/map accessors from variable naming conventions, and any constructor-based accessor provenance is cleared immediately when the tracked variable is reassigned.
 
 `normalize-operator-aliases` is intentionally syntax-safety scoped: it repairs invalid `not` keyword usage to `!` in executable code (while skipping uses in comments and string literals), and avoids style rewrites.
 Logical operator style normalization (`&&`/`||`/`^^` vs `and`/`or`/`xor`) belongs to the formatter (`@gmloop/format`, `logicalOperatorsStyle`), so lint does not rewrite those forms.
@@ -177,6 +163,20 @@ Feather rules are exposed as `feather/gm####` and sourced from `Lint.services.fe
 
 `feather/gm1010` uses a conservative numeric-casting strategy: it only wraps `num*` identifiers with `real(...)` when they are directly added to a numeric literal (for example, `5 + numFive`), and leaves mixed string-concatenation chains untouched.
 
+Migrated Feather ownership is split by diagnostic category: `feather/gm1017`
+handles deprecated callable APIs, `feather/gm1023` deprecated constants,
+`feather/gm1024` deprecated built-in variables, `feather/gm1028`
+data-structure accessor correction, `feather/gm1056` trailing optional
+parameter defaults, and `feather/gm2004` safe unused-index `for` to `repeat`
+conversion. These rules retain scoped AST checks and only expose local fixes
+that can be proven safe.
+
+`gml/normalize-doc-comments` remains the canonical documentation normalizer,
+so overlapping `feather/gm1062` diagnostics are report-only.
+`gml/optimize-logical-flow` owns logical-flow rewrites, including nullish
+fallback condensation, so overlapping `feather/gm2061` diagnostics are also
+report-only.
+
 ## Development
 
 ```bash
@@ -189,12 +189,6 @@ Performance-sensitive autofix rules also have dedicated regression coverage unde
 ## TODO
 
 - **BUG**: When lint-fixing is run through the GMLoop CLI, if no eslint configuration file is detected in the target GameMaker project, the CLI should fall back to a default, "recommended" ruleset.
-- **FEAT**: Add a new "all" lint ruleset config that includes all `gml/*` and `feather/*` rules at their recommended levels (either "warn" or "error"), so users can easily enable every lint rule with a single config spread.
-- The structure/files of `src/lint/src/doc-comment` is confusing and disorganized. Would a flat structure be better where we move files in 'src/lint/src/doc-comment/service' up one level?
 - Add an ESLint auto-fix rule that detects simple numeric accumulation loops like `alpha += index` over a fixed range and replaces them with the equivalent arithmetic-series expression. Example: `for index = 0..9` can become `alpha += count * (count - 1) * 0.5`, avoiding unnecessary runtime iteration.
 - **BUG**: Split the large, multi-purpose `optimize-logical-flow` rule into multiple focused rules that each target a specific logical optimization pattern
-- **BUG**: As of 6/6/2026, we seem to have circular lint fixes somewhere:
-  ```
-  (node:89657) ESLintCircularFixesWarning: Circular fixes detected while fixing /Users/henrykirk/Desktop/CannonFatherSource/cannonfather/scripts/group_draw_sprite/group_draw_sprite.gml. It is likely that you have conflicting rules in your configuration.
-  ```
-  We should also ensure to NOT have any lint auto-fix rules that conflict. If one of our "gml/" lint rules conflicts with a "feather/" lint rule, the "gml/" auto-fix should take precedence and we should make the "feather/" rule **strictly report-only**.
+- **BUG**: Audit the lint auto-fix rules for conflicts. If a `gml/` rule conflicts with a `feather/` rule, the `gml/` auto-fix should take precedence and the `feather/` rule should be made **strictly report-only**.

@@ -1,6 +1,6 @@
 import { html } from "lit";
-import { ref } from "lit/directives/ref.js";
 
+import type { GraphVisualizationProjectWorkflow } from "../../graph/types.js";
 import { type GraphVisualizationUiModel, hasLoadedGraphIndex, hasLoadedGraphProject } from "../contracts.js";
 import { LIVE_RELOAD_RUNTIME_TAB_TARGET, resolveLiveReloadRuntimeUrl } from "../live-reload-runtime-tab.js";
 import type { GraphVisualizationUiPage, GraphVisualizationUiState } from "../state/types.js";
@@ -8,9 +8,9 @@ import { createGraphVisualizationDocsPanelContent } from "./docs-panel-content.j
 import {
     createSearchResultSummary,
     normalizeCatalogSearchQuery,
+    searchCatalogEntries,
     searchCliEntries,
-    searchMcpEntries,
-    searchRulesSections
+    searchMcpEntries
 } from "./docs-search.js";
 import {
     GRAPH_UI_EVENT_CYCLE_LABEL_MODE,
@@ -27,8 +27,14 @@ import {
     type GraphUiNavigatePageDetail,
     type GraphUiSetConfigViewDetail,
     type GraphUiSetDocsViewDetail,
-    type GraphUiSetSearchQueryDetail
+    type GraphUiSetSearchQueryDetail,
+    type GraphUiTriggerFixDetail
 } from "./events.js";
+import {
+    evaluateToolbarKeyboardShortcut,
+    resolveKeyboardShortcutTarget,
+    type ToolbarKeyboardShortcutAction
+} from "./keyboard-shortcut-policy.js";
 import { LightDomLitElement } from "./light-dom-lit-element.js";
 import type { GmStatusChipStatus } from "./primitives/gm-status-chip.js";
 
@@ -108,16 +114,35 @@ function resolveFixStatusChipStatus(
 }
 
 function resolveFixStatusSummary(state: GraphVisualizationUiState): string {
+    const workflowLabel =
+        state.fixWorkflow === "format"
+            ? "Formatting"
+            : state.fixWorkflow === "lint"
+              ? "Linting"
+              : state.fixWorkflow === "refactor"
+                ? "Refactoring"
+                : "Applying fixes";
+    const completedWorkflowLabel =
+        state.fixWorkflow === "format"
+            ? "Formatting"
+            : state.fixWorkflow === "lint"
+              ? "Linting"
+              : state.fixWorkflow === "refactor"
+                ? "Refactoring"
+                : "All fixes";
+
     if (state.isFixPending) {
-        return "Applying fixes to your project (this may take a while).";
+        return `${workflowLabel} your project (this may take a while).`;
     }
 
     if (state.fixStatus === "success") {
-        return "All fixes have been applied successfully.";
+        return `${completedWorkflowLabel} completed successfully.`;
     }
 
     if (state.fixStatus === "error") {
-        return "Fixes encountered errors. Review the run log for details.";
+        return state.fixWorkflow === "fix"
+            ? "Fixes encountered errors. Review the run log for details."
+            : `${workflowLabel} encountered errors. Review the run log for details.`;
     }
 
     return "Run the opened project's gmloop-configured repair workflow.";
@@ -125,11 +150,41 @@ function resolveFixStatusSummary(state: GraphVisualizationUiState): string {
 
 function resolveDocsStatusSummary(model: GraphVisualizationUiModel, state: GraphVisualizationUiState): string {
     const docsPanelContent = createGraphVisualizationDocsPanelContent(model.documentationCatalogs);
-    return state.activeDocsView === "cli"
-        ? docsPanelContent.cliMetaText
-        : state.activeDocsView === "mcp"
-          ? docsPanelContent.mcpMetaText
-          : docsPanelContent.rulesMetaText;
+    if (state.activeDocsView === "cli") {
+        return docsPanelContent.cliMetaText;
+    }
+    if (state.activeDocsView === "mcp") {
+        return docsPanelContent.mcpMetaText;
+    }
+    if (state.activeDocsView === "linting") {
+        return docsPanelContent.lintingMetaText;
+    }
+    if (state.activeDocsView === "formatting") {
+        return docsPanelContent.formattingMetaText;
+    }
+    return docsPanelContent.codemodsMetaText;
+}
+
+/**
+ * Return true when toolbar keyboard shortcuts should yield to native text entry.
+ */
+export function isToolbarKeyboardShortcutTextEntryTarget(target: EventTarget | null): boolean {
+    if (typeof Element !== "undefined" && target instanceof Element) {
+        if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) {
+            return true;
+        }
+
+        if (target instanceof HTMLInputElement) {
+            const inputType = target.type.toLowerCase();
+            return !["button", "checkbox", "color", "file", "image", "radio", "range", "reset", "submit"].includes(
+                inputType
+            );
+        }
+
+        return typeof HTMLElement !== "undefined" && target instanceof HTMLElement && target.isContentEditable;
+    }
+
+    return false;
 }
 
 function resolveConfigStatusSummary(model: GraphVisualizationUiModel): string {
@@ -150,8 +205,6 @@ export class GmGraphToolbar extends LightDomLitElement {
 
     public accessor state: GraphVisualizationUiState | null = null;
 
-    #searchInput: HTMLInputElement | null = null;
-
     #canUseGraphControls(): boolean {
         return this.model !== null && hasLoadedGraphIndex(this.model);
     }
@@ -161,90 +214,46 @@ export class GmGraphToolbar extends LightDomLitElement {
             return;
         }
 
-        if (event.key === "Escape" && this.state.searchQuery) {
-            event.preventDefault();
-            this.#emitSearchQuery("");
-            return;
-        }
+        const action = evaluateToolbarKeyboardShortcut({
+            canUseGraphControls: this.#canUseGraphControls(),
+            hasModifier: event.altKey || event.metaKey || event.ctrlKey,
+            hasSearchQuery: this.state.searchQuery.length > 0,
+            isTextEntryTarget: isToolbarKeyboardShortcutTextEntryTarget(resolveKeyboardShortcutTarget(event)),
+            key: event.key
+        });
 
-        if (event.altKey || event.metaKey || event.ctrlKey) {
-            return;
-        }
-
-        switch (event.key.toLowerCase()) {
-            case "g": {
-                if (document.activeElement === this.#searchInput) {
-                    return;
-                }
-                if (!this.#canUseGraphControls()) {
-                    return;
-                }
-                event.preventDefault();
-                this.#emitToggleGraphView();
-                break;
-            }
-            case "l": {
-                if (document.activeElement === this.#searchInput) {
-                    return;
-                }
-                if (!this.#canUseGraphControls()) {
-                    return;
-                }
-                event.preventDefault();
-                this.#emitCycleLabelMode();
-                break;
-            }
-            case "r": {
-                if (document.activeElement === this.#searchInput) {
-                    return;
-                }
-                if (!this.#canUseGraphControls()) {
-                    return;
-                }
-                event.preventDefault();
-                this.#emitResetDefaults();
-                break;
-            }
-            case "1": {
-                if (!this.#canUseGraphControls()) {
-                    return;
-                }
-                event.preventDefault();
-                this.#emitNavigatePage("graph");
-                break;
-            }
-            case "2": {
-                event.preventDefault();
-                this.#emitNavigatePage("docs");
-                break;
-            }
-            case "3": {
-                event.preventDefault();
-                this.#emitNavigatePage("config");
-                break;
-            }
-            case "4": {
-                event.preventDefault();
-                this.#emitNavigatePage("fix");
-                break;
-            }
-            case "5": {
-                event.preventDefault();
-                this.#emitNavigatePage("playground");
-                break;
-            }
-            case "6": {
-                event.preventDefault();
-                this.#emitNavigatePage("mcp");
-                break;
-            }
-            case "7": {
-                event.preventDefault();
-                this.#emitNavigatePage(LIVE_RELOAD_PAGE);
-                break;
-            }
-        }
+        this.#applyToolbarKeyboardShortcut(event, action);
     };
+
+    #applyToolbarKeyboardShortcut(event: KeyboardEvent, action: ToolbarKeyboardShortcutAction): void {
+        if (action.kind === "none") {
+            return;
+        }
+
+        event.preventDefault();
+
+        switch (action.kind) {
+            case "clear-search": {
+                this.#emitSearchQuery("");
+                return;
+            }
+            case "toggle-graph-view": {
+                this.#emitToggleGraphView();
+                return;
+            }
+            case "cycle-label-mode": {
+                this.#emitCycleLabelMode();
+                return;
+            }
+            case "reset-defaults": {
+                this.#emitResetDefaults();
+                return;
+            }
+            case "navigate-page": {
+                this.#emitNavigatePage(action.page);
+            }
+        }
+    }
 
     #onSearchInput = (eventValue: Event): void => {
         const target = eventValue.target;
@@ -262,7 +271,6 @@ export class GmGraphToolbar extends LightDomLitElement {
     public disconnectedCallback(): void {
         super.disconnectedCallback();
         this.removeEventListener("keydown", this.#onKeyDown);
-        this.#searchInput = null;
     }
 
     #emitSearchQuery(searchQuery: string): void {
@@ -383,15 +391,16 @@ export class GmGraphToolbar extends LightDomLitElement {
         );
     }
 
-    #emitFix(): void {
+    #emitFix(workflow: GraphVisualizationProjectWorkflow): void {
         if (!this.model || !hasLoadedGraphProject(this.model)) {
             return;
         }
 
         this.dispatchEvent(
-            new CustomEvent(GRAPH_UI_EVENT_TRIGGER_FIX, {
+            new CustomEvent<GraphUiTriggerFixDetail>(GRAPH_UI_EVENT_TRIGGER_FIX, {
                 bubbles: true,
-                composed: true
+                composed: true,
+                detail: { workflow }
             })
         );
     }
@@ -447,13 +456,19 @@ export class GmGraphToolbar extends LightDomLitElement {
         const searchQuery = normalizeCatalogSearchQuery(this.state.searchQuery);
         const cliSearchResult = searchCliEntries(docsPanelContent.cliEntries, searchQuery);
         const mcpSearchResult = searchMcpEntries(docsPanelContent.mcpEntries, searchQuery);
-        const rulesSearchResult = searchRulesSections(docsPanelContent.rulesSections, searchQuery);
+        const lintingSearchResult = searchCatalogEntries(docsPanelContent.lintingEntries, searchQuery);
+        const formattingSearchResult = searchCatalogEntries(docsPanelContent.formattingEntries, searchQuery);
+        const codemodsSearchResult = searchCatalogEntries(docsPanelContent.codemodsEntries, searchQuery);
         const totalCount =
             this.state.activeDocsView === "cli"
                 ? cliSearchResult.totalCount
                 : this.state.activeDocsView === "mcp"
                   ? mcpSearchResult.totalCount
-                  : rulesSearchResult.totalCount;
+                  : this.state.activeDocsView === "linting"
+                    ? lintingSearchResult.totalCount
+                    : this.state.activeDocsView === "formatting"
+                      ? formattingSearchResult.totalCount
+                      : codemodsSearchResult.totalCount;
         const searchResultSummary = createSearchResultSummary(searchQuery, this.state.activeDocsView, totalCount);
 
         // Docs subview and catalog search controls stay in the shared page toolbar
@@ -477,12 +492,28 @@ export class GmGraphToolbar extends LightDomLitElement {
                     MCP
                 </button>
                 <button
-                    id="docs-view-rules"
-                    aria-pressed=${this.state.activeDocsView === "rules"}
-                    class=${this.state.activeDocsView === "rules" ? CLASS_BTN_CHIP_ACTIVE : CLASS_BTN_CHIP}
-                    @click=${() => this.#emitDocsView("rules")}
+                    id="docs-view-linting"
+                    aria-pressed=${this.state.activeDocsView === "linting"}
+                    class=${this.state.activeDocsView === "linting" ? CLASS_BTN_CHIP_ACTIVE : CLASS_BTN_CHIP}
+                    @click=${() => this.#emitDocsView("linting")}
                 >
-                    Rules
+                    Linting
+                </button>
+                <button
+                    id="docs-view-formatting"
+                    aria-pressed=${this.state.activeDocsView === "formatting"}
+                    class=${this.state.activeDocsView === "formatting" ? CLASS_BTN_CHIP_ACTIVE : CLASS_BTN_CHIP}
+                    @click=${() => this.#emitDocsView("formatting")}
+                >
+                    Formatting
+                </button>
+                <button
+                    id="docs-view-codemods"
+                    aria-pressed=${this.state.activeDocsView === "codemods"}
+                    class=${this.state.activeDocsView === "codemods" ? CLASS_BTN_CHIP_ACTIVE : CLASS_BTN_CHIP}
+                    @click=${() => this.#emitDocsView("codemods")}
+                >
+                    Codemods
                 </button>
             </div>
             <div class="docs-search-panel" role="search" aria-label="Filter documentation catalog">
@@ -546,21 +577,41 @@ export class GmGraphToolbar extends LightDomLitElement {
         }
 
         const isPending = this.state?.isFixPending === true;
+        const activeWorkflow = isPending ? (this.state?.fixWorkflow ?? null) : null;
+        const workflows = [
+            { id: "run-fix", label: "Fix", pendingLabel: "Fixing...", workflow: "fix" },
+            { id: "run-format", label: "Format", pendingLabel: "Formatting...", workflow: "format" },
+            {
+                id: "run-refactor",
+                label: "Refactor / Codemods",
+                pendingLabel: "Refactoring...",
+                workflow: "refactor"
+            },
+            { id: "run-lint", label: "Lint", pendingLabel: "Linting...", workflow: "lint" }
+        ] as const;
 
         return html`
             <div class="toolbar-control-group toolbar-fix-controls">
-                <button
-                    id="run-fix"
-                    type="button"
-                    class="gm-btn gm-btn--primary"
-                    ?disabled=${isPending}
-                    @click=${() => this.#emitFix()}
-                >
-                    <span class="button-content">
-                        ${isPending ? html`<span class="button-spinner" aria-hidden="true"></span>` : null}
-                        <span class="button-label">${isPending ? "Applying Fixes..." : "Apply Fixes"}</span>
-                    </span>
-                </button>
+                ${workflows.map(
+                    (entry, index) => html`
+                        <button
+                            id=${entry.id}
+                            type="button"
+                            class=${index === 0 ? "gm-btn gm-btn--primary" : "gm-btn"}
+                            ?disabled=${isPending}
+                            @click=${() => this.#emitFix(entry.workflow)}
+                        >
+                            <span class="button-content">
+                                ${activeWorkflow === entry.workflow
+                                    ? html`<span class="button-spinner" aria-hidden="true"></span>`
+                                    : null}
+                                <span class="button-label"
+                                    >${activeWorkflow === entry.workflow ? entry.pendingLabel : entry.label}</span
+                                >
+                            </span>
+                        </button>
+                    `
+                )}
             </div>
         `;
     }
@@ -747,9 +798,6 @@ export class GmGraphToolbar extends LightDomLitElement {
                             .value=${this.state.searchQuery}
                             placeholder="Search nodes…"
                             ?disabled=${!hasLoadedIndex}
-                            ${ref((element) => {
-                                this.#searchInput = element as HTMLInputElement | null;
-                            })}
                             @input=${this.#onSearchInput}
                         />
                     </div>

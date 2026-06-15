@@ -380,9 +380,13 @@ export class GmlToJsEmitter {
         // Try constant folding first for compile-time optimization
         const folded = tryFoldConstantExpression(ast);
         if (folded !== null) {
-            // Emit the folded constant directly.
             // JSON.stringify guarantees valid JavaScript string escaping
-            // for control characters (newlines, tabs, etc.) and quotes.
+            // for control characters (newlines, tabs, etc.) and quotes, so
+            // a folded GML string literal stays a valid JS string literal in
+            // the emitted output. The numeric branch falls through to
+            // `String(folded)` because the optimizer already returns a
+            // primitive number; `String()` is sufficient and avoids a
+            // needless `JSON.stringify` round-trip.
             if (typeof folded === "string") {
                 return JSON.stringify(folded);
             }
@@ -404,7 +408,12 @@ export class GmlToJsEmitter {
         // Try constant folding first for compile-time optimization
         const folded = tryFoldConstantUnaryExpression(ast);
         if (folded !== null) {
-            // Emit the folded constant directly
+            // Unary folding only ever produces booleans or numbers (e.g.,
+            // `!!x` collapses to `true`/`false` and `-5` collapses to `-5`),
+            // so `String(folded)` is safe — unlike the binary branch, no
+            // string-literal escaping is required. Keeping the path
+            // string-agnostic here also avoids the `JSON.stringify` cost
+            // for the overwhelmingly common numeric/undefined case.
             return String(folded);
         }
         // Fall back to runtime evaluation
@@ -481,6 +490,7 @@ export class GmlToJsEmitter {
     }
 
     private visitNewExpression(ast: NewExpressionNode): string {
+        this.recordScriptIdentifierDependency(ast.expression);
         const expression = this.visit(ast.expression);
         const argsList = this.joinArguments(ast.arguments ?? []);
         return `new ${expression}(${argsList})`;
@@ -623,7 +633,12 @@ export class GmlToJsEmitter {
                 continue;
             }
 
-            // Process statements for this case
+            // Buffer the case body separately so we can detect "all statements
+            // were elided (e.g., pure comments or empty declarations)" and
+            // emit just the case header. Mirroring the empty-body path above
+            // preserves the GML fall-through semantics — without this guard
+            // we would emit `{ case X: }` followed by nothing, which JS parses
+            // as a syntax error.
             const caseBuilder = new StringBuilder(stmts.length);
             this.appendStatementsWithTermination(caseBuilder, stmts);
 
@@ -893,6 +908,7 @@ export class GmlToJsEmitter {
             return "";
         }
 
+        this.recordScriptIdentifierDependency(parentClause.id);
         const parentConstructorName =
             typeof parentClause.id === "string" ? parentClause.id : this.visit(parentClause.id);
         if (!parentConstructorName) {
@@ -909,6 +925,31 @@ export class GmlToJsEmitter {
 
     private joinTruthy(lines: Array<string | undefined | null | false>): string {
         return Core.compactArray(lines).join("\n");
+    }
+
+    private recordScriptIdentifierDependency(node: GmlNode | string | IdentifierMetadata | null | undefined): void {
+        const identifier = this.resolveIdentifierMetadata(node);
+        if (!identifier || this.semantic.kindOfIdent(identifier) !== "script") {
+            return;
+        }
+
+        const symbol = this.semantic.qualifiedSymbol(identifier);
+        this.scriptRefs.add(symbol ?? this.semantic.nameOfIdent(identifier));
+    }
+
+    private resolveIdentifierMetadata(
+        node: GmlNode | string | IdentifierMetadata | null | undefined
+    ): IdentifierMetadata | null {
+        if (!node) {
+            return null;
+        }
+        if (typeof node === "string") {
+            return { name: node };
+        }
+        if (typeof (node as IdentifierMetadata).name === "string") {
+            return node as IdentifierMetadata;
+        }
+        return null;
     }
 
     private resolveIdentifierName(node: GmlNode | IdentifierMetadata | null | undefined): string | null {

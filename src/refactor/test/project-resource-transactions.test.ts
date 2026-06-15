@@ -10,6 +10,7 @@ import {
     addObjectEvent,
     addProjectResource,
     addRoomInstance,
+    deleteObjectEvent,
     deleteRoomInstance,
     duplicateProjectResource,
     moveProjectResource,
@@ -272,6 +273,7 @@ void test("addObjectEvent appends event metadata and source with dry-run safety"
             projectRoot
         });
         assert.equal(dryRun.action, "add");
+        assert.deepEqual(dryRun.deletedPaths, []);
         assert.equal(dryRun.dryRun, true);
         assert.equal(dryRun.eventFilePath, "objects/obj_player/0_0.gml");
         assert.deepEqual(dryRun.writtenPaths, ["objects/obj_player/obj_player.yy", "objects/obj_player/0_0.gml"]);
@@ -285,6 +287,7 @@ void test("addObjectEvent appends event metadata and source with dry-run safety"
             projectRoot
         });
         assert.equal(writeResult.dryRun, false);
+        assert.deepEqual(writeResult.deletedPaths, []);
         assert.equal(writeResult.eventType, 0);
         assert.equal(writeResult.eventNumber, 0);
 
@@ -308,6 +311,34 @@ void test("addObjectEvent appends event metadata and source with dry-run safety"
             }),
             /already has event 0:0/u
         );
+
+        const deleteDryRun = await deleteObjectEvent({
+            descriptor: { category: "Create", descriptor: "0" },
+            dryRun: true,
+            objectName: "obj_player",
+            projectRoot
+        });
+        assert.equal(deleteDryRun.action, "delete");
+        assert.equal(deleteDryRun.dryRun, true);
+        assert.deepEqual(deleteDryRun.deletedPaths, ["objects/obj_player/0_0.gml"]);
+        assert.deepEqual(deleteDryRun.writtenPaths, ["objects/obj_player/obj_player.yy"]);
+        await assert.doesNotReject(access(path.join(projectRoot, "objects/obj_player/0_0.gml")));
+
+        const deleteWrite = await deleteObjectEvent({
+            descriptor: { category: "Create", descriptor: "0" },
+            dryRun: false,
+            objectName: "obj_player",
+            projectRoot
+        });
+        assert.equal(deleteWrite.dryRun, false);
+        assert.deepEqual(deleteWrite.deletedPaths, ["objects/obj_player/0_0.gml"]);
+        await assert.rejects(access(path.join(projectRoot, "objects/obj_player/0_0.gml")));
+
+        const deletedObjectMetadata = Core.parseProjectMetadataDocumentForMutation(
+            await readFile(objectMetadataPath, "utf8"),
+            objectMetadataPath
+        ).document;
+        assert.deepEqual(deletedObjectMetadata.eventList, []);
     } finally {
         await rm(projectRoot, { force: true, recursive: true });
     }
@@ -339,6 +370,7 @@ void test("addRoomInstance appends an object instance to a room with dry-run saf
             y: 64
         });
         assert.equal(dryRun.action, "add");
+        assert.deepEqual(dryRun.deletedPaths, []);
         assert.equal(dryRun.dryRun, true);
         assert.equal(dryRun.objectPath, "objects/obj_player/obj_player.yy");
         assert.equal(dryRun.roomPath, "rooms/rm_main/rm_main.yy");
@@ -450,22 +482,23 @@ void test("addRoomInstance appends an object instance to a room with dry-run saf
     }
 });
 
-void test("resolveProjectManifestFile locates the single .yyp manifest and reports its descriptor", async () => {
-    const projectRoot = await createTemporaryProjectRoot();
+void test("resolveProjectManifestFile returns the only .yyp file with a filename fallback name", async () => {
+    const projectRoot = await fsMkdtemp("gmloop-project-resource-");
 
     try {
-        const manifest = await resolveProjectManifestFile(projectRoot);
+        await writeProjectFile(projectRoot, "MyGame.yyp", "");
 
+        const manifest = await resolveProjectManifestFile(projectRoot);
         assert.equal(manifest.absolutePath, path.join(projectRoot, "MyGame.yyp"));
-        assert.equal(manifest.relativePath, "MyGame.yyp");
         assert.equal(manifest.projectName, "MyGame");
+        assert.equal(manifest.relativePath, "MyGame.yyp");
     } finally {
         await rm(projectRoot, { force: true, recursive: true });
     }
 });
 
-void test("resolveProjectManifestFile throws when the project root has no .yyp manifest", async () => {
-    const projectRoot = await fsMkdtemp("gmloop-missing-manifest-");
+void test("resolveProjectManifestFile throws when the project root is missing a .yyp manifest", async () => {
+    const projectRoot = await fsMkdtemp("gmloop-project-resource-");
 
     try {
         await assert.rejects(resolveProjectManifestFile(projectRoot), /Could not locate a \.yyp manifest/u);
@@ -474,32 +507,40 @@ void test("resolveProjectManifestFile throws when the project root has no .yyp m
     }
 });
 
-void test("resolveProjectManifestFile throws when the project root has multiple .yyp manifests", async () => {
-    const projectRoot = await fsMkdtemp("gmloop-duplicate-manifest-");
+void test("resolveProjectManifestFile throws when multiple .yyp manifests are present", async () => {
+    const projectRoot = await fsMkdtemp("gmloop-project-resource-");
 
     try {
-        await writeProjectFile(projectRoot, "First.yyp", '{"name":"First"}\n');
-        await writeProjectFile(projectRoot, "Second.yyp", '{"name":"Second"}\n');
+        await writeProjectFile(projectRoot, "MyGame.yyp", "");
+        await writeProjectFile(projectRoot, "Secondary.yyp", "");
 
-        await assert.rejects(
-            resolveProjectManifestFile(projectRoot),
-            /multiple \.yyp manifests.*Project operations require exactly one project manifest/u
-        );
+        await assert.rejects(resolveProjectManifestFile(projectRoot), /require exactly one project manifest/u);
     } finally {
         await rm(projectRoot, { force: true, recursive: true });
     }
 });
 
-void test("readProjectMetadataDocument parses a manifest into its underlying record", async () => {
-    const projectRoot = await createTemporaryProjectRoot();
+void test("readProjectMetadataDocument returns the parsed JSON document for a metadata file", async () => {
+    const projectRoot = await fsMkdtemp("gmloop-project-resource-");
+    const metadataRelativePath = "objects/obj_player/obj_player.yy";
+    const metadataAbsolutePath = path.join(projectRoot, metadataRelativePath);
+    const metadataContents = `${JSON.stringify(
+        {
+            name: "obj_player",
+            resourceType: "GMObject",
+            eventList: []
+        },
+        null,
+        4
+    )}\n`;
 
     try {
-        const manifestPath = path.join(projectRoot, "MyGame.yyp");
-        const document = await readProjectMetadataDocument(manifestPath);
+        await writeProjectFile(projectRoot, metadataRelativePath, metadataContents);
 
-        assert.equal(document.name, "MyGame");
-        assert.equal(document.resourceType, "GMProject");
-        assert.deepEqual(document.resources, []);
+        const document = await readProjectMetadataDocument(metadataAbsolutePath);
+        assert.equal(document.name, "obj_player");
+        assert.equal(document.resourceType, "GMObject");
+        assert.deepEqual(document.eventList, []);
     } finally {
         await rm(projectRoot, { force: true, recursive: true });
     }

@@ -57,20 +57,26 @@ function createDefaultOptions(provider: GmlFormatProvider): GmlFormatDefaultOpti
  * a provider to verify the high-level plugin only depends on the abstraction.
  */
 export function createGmlFormat(provider: GmlFormatProvider = defaultGmlFormatProvider): GmlFormat {
-    // Inject buildPrintableDocCommentLines into the plugin options so the
-    // printer can retrieve it via options.gml.buildPrintableDocCommentLines
-    // without directly importing from ../comments/description-doc.js.
-    // This keeps the printer decoupled from the comment subsystem boundary.
-    const { buildPrintableDocCommentLines } = defaultGmlFormatComponentImplementations;
+    // Inject comment-subsystem helpers into the plugin options so the
+    // `printer/comment-print-boundary.ts` boundary can retrieve them via
+    // `options.gml.<helper>` without directly importing the comments
+    // adapter. (target-state.md §2.3)
+    const { printDanglingComments, printDanglingCommentsAsGroup, printComment } =
+        defaultGmlFormatComponentImplementations;
 
     const rawDefaultOptions = createDefaultOptions(provider);
     const defaultOptions: GmlFormatDefaultOptions = Object.freeze({
         ...rawDefaultOptions,
-        // Canonical injectable for the printer's doc-comment output module.
-        // This is part of the GmlFormatComponentContract and is retrieved
-        // by src/format/src/printer/doc-comment-output.ts from options.gml,
-        // keeping that module free of direct cross-subsystem imports.
-        gml: Object.freeze({ buildPrintableDocCommentLines })
+        // Canonical injectables for the printer's comment subsystems. These
+        // are part of the GmlFormatComponentContract and are retrieved by
+        // `src/format/src/printer/comment-print-boundary.ts` from
+        // `options.gml`, keeping that module free of direct
+        // cross-subsystem imports.
+        gml: Object.freeze({
+            printDanglingComments,
+            printDanglingCommentsAsGroup,
+            printComment
+        })
     });
 
     const plugin: GmlFormat = {

@@ -262,12 +262,12 @@ Common composition:
 ```ts
 import { Lint } from "@gmloop/lint";
 
-export default [
-    ...Lint.configs.recommended,
-    ...Lint.configs.feather,
-    ...Lint.configs.performance
-];
+export default [...Lint.configs.all];
 ```
+
+`Lint.configs.all` enables every `gml/*` and `feather/*` rule at its recommended
+`"warn"` or `"error"` level. The narrower `recommended`, `feather`, and
+`performance` presets remain available for custom composition.
 
 `gmloop.json` also supports lint preset selection for fixture/integration and
 project-config-driven lint flows via `lintRuleset`:
@@ -281,7 +281,7 @@ project-config-driven lint flows via `lintRuleset`:
 }
 ```
 
-Supported `lintRuleset` values are `"recommended"`, `"feather"`, and
+Supported `lintRuleset` values are `"all"`, `"recommended"`, `"feather"`, and
 `"performance"`. `lintRules` remains optional and overrides rules from the
 selected ruleset when both are present.
 
@@ -300,7 +300,12 @@ pnpm install
 ### Common scripts
 
 ```bash
+# iterative local development
 pnpm run build:ts
+pnpm run lint:quiet
+pnpm test
+
+# pre-PR / CI-style validation
 pnpm run lint:ci
 pnpm run format:check
 pnpm run report
@@ -325,11 +330,13 @@ Start here for deeper context and plans:
 - [`docs/README.md`](docs/README.md) (documentation index)
 - [`docs/target-state.md`](docs/target-state.md) (project architecture target state)
 - [`docs/contributor-onboarding.md`](docs/contributor-onboarding.md) (first-time contributor checklist)
-- [`src/cli/README.md`](src/cli/README.md)
-- [`src/semantic/README.md`](src/semantic/README.md)
-- [`src/refactor/README.md`](src/refactor/README.md)
-- [`src/lint/README.md`](src/lint/README.md)
-- [`src/mcp/README.md`](src/mcp/README.md)
+- [`src/cli/README.md`](src/cli/README.md) (full command catalog)
+- [`src/format/README.md`](src/format/README.md) (formatter ownership and conventions)
+- [`src/semantic/README.md`](src/semantic/README.md) (scope/symbol analysis)
+- [`src/refactor/README.md`](src/refactor/README.md) (codemod/refactor transactions)
+- [`src/lint/README.md`](src/lint/README.md) (ESLint language plugin + rules)
+- [`src/runtime-wrapper/README.md`](src/runtime-wrapper/README.md) (HTML5 hot-reload bridge)
+- [`src/mcp/README.md`](src/mcp/README.md) (MCP server surface for AI tooling)
 - [GitHub Releases](https://github.com/SimulatorLife/GMLoop/releases) (project changelog and release notes)
 
 ## References / Tools / Docs

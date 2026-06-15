@@ -1,10 +1,11 @@
 export type {
     AddObjectEventRequest,
+    DeleteObjectEventRequest,
     ObjectEventDescriptor,
     ObjectEventMutationResult,
     UpdateObjectEventRequest
 } from "./object-event-operations.js";
-export { addObjectEvent, updateObjectEvent } from "./object-event-operations.js";
+export { addObjectEvent, deleteObjectEvent, updateObjectEvent } from "./object-event-operations.js";
 export type { ProjectResourceKindValue } from "./project-resource-kinds.js";
 export {
     isProjectResourceKind,
@@ -31,6 +32,8 @@ export {
     renameProjectResource,
     resolveProjectManifestFile
 } from "./project-resource-operations.js";
+export type { RoomCameraMutationResult, UpdateRoomCameraRequest } from "./room-camera-operations.js";
+export { updateRoomCamera } from "./room-camera-operations.js";
 export type {
     AddRoomInstanceRequest,
     DeleteRoomInstanceRequest,

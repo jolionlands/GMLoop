@@ -42,6 +42,7 @@ export type GraphVisualizationNodeKind =
     | "project"
     | "room"
     | "room_layer"
+    | "room_instance"
     | "script"
     | "sequence"
     | "shader"
@@ -417,3 +418,12 @@ export type GraphVisualizationProjectConfigurationCatalog = Readonly<{
         codemods: ReadonlyArray<GraphVisualizationProjectConfigurationRefactorCodemodEntry>;
     }>;
 }>;
+/**
+ * Project-writing workflows available from the Fix UI surface.
+ */
+export const PROJECT_WORKFLOWS = ["fix", "format", "refactor", "lint"] as const;
+
+/**
+ * Project-writing workflow available from the Fix UI surface.
+ */
+export type GraphVisualizationProjectWorkflow = (typeof PROJECT_WORKFLOWS)[number];

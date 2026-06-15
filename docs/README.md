@@ -17,7 +17,7 @@ then return here for deeper context.
   Flat ESLint config that composes the `@gmloop/lint` presets (without TypeScript
   requirement).
 - [`examples/example.eslint.all-rules.config.js`](examples/example.eslint.all-rules.config.js) —
-  Flat ESLint config with all available `@gmloop/lint` rules.
+  Flat ESLint config using the preset with all available `@gmloop/lint` rules.
 - [`examples/example.mcp.json`](examples/example.mcp.json) — MCP client config
   example that starts the MCP stdio server via the `gmloop mcp` CLI command
   through `pnpm`.
@@ -39,6 +39,11 @@ then return here for deeper context.
 - [CLI command guide](../src/cli/README.md) — Full command catalog and
   project-config behavior for parser, lint, refactor, transpile, watch, and
   graph workflows.
+- [Formatter workspace reference](../src/format/README.md) — Formatter
+  ownership boundaries, deprecated options, and layout conventions for
+  `@gmloop/format`.
+- [Runtime wrapper reference](../src/runtime-wrapper/README.md) — HTML5
+  hot-reload bridge, patch application, and live function swapping.
 
 ## Contributor workflow
 

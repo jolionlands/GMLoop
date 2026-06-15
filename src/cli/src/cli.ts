@@ -15,7 +15,10 @@
  * editor integrations directly.
  */
 
+import { realpathSync } from "node:fs";
+import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 import { Command } from "commander";
 
@@ -45,11 +48,57 @@ function isNodeTestRunnerProcess(execArguments: ReadonlyArray<string> = process.
     );
 }
 
+function safeRealpath(p: string): string | null {
+    try {
+        return realpathSync(p);
+    } catch {
+        return null;
+    }
+}
+
+function isCliEntrypointModule(
+    entrypointPath: string | undefined = process.argv[1],
+    moduleUrl = import.meta.url
+): boolean {
+    if (!entrypointPath) {
+        return false;
+    }
+
+    const resolvedEntrypoint = safeRealpath(entrypointPath) ?? path.resolve(entrypointPath);
+    const resolvedModule = safeRealpath(fileURLToPath(moduleUrl)) ?? fileURLToPath(moduleUrl);
+
+    if (resolvedEntrypoint === resolvedModule) {
+        return true;
+    }
+
+    const resolvedIndexJs =
+        safeRealpath(path.resolve(path.dirname(resolvedModule), "../index.js")) ??
+        path.resolve(path.dirname(resolvedModule), "../index.js");
+    if (resolvedEntrypoint === resolvedIndexJs) {
+        return true;
+    }
+
+    const resolvedIndexTs =
+        safeRealpath(path.resolve(path.dirname(resolvedModule), "../index.ts")) ??
+        path.resolve(path.dirname(resolvedModule), "../index.ts");
+    if (resolvedEntrypoint === resolvedIndexTs) {
+        return true;
+    }
+
+    return false;
+}
+
 function shouldAutoRunCliProcess(
     env: NodeJS.ProcessEnv = process.env,
-    execArguments: ReadonlyArray<string> = process.execArgv
+    execArguments: ReadonlyArray<string> = process.execArgv,
+    entrypointPath: string | undefined = process.argv[1],
+    moduleUrl = import.meta.url
 ): boolean {
-    return !isCliRunSkipped(env) && !isNodeTestRunnerProcess(execArguments);
+    return (
+        isCliEntrypointModule(entrypointPath, moduleUrl) &&
+        !isCliRunSkipped(env) &&
+        !isNodeTestRunnerProcess(execArguments)
+    );
 }
 
 const program = applyStandardCommandOptions(new Command())
@@ -282,6 +331,7 @@ export const __test__ = Object.freeze({
     ...__runtimeTest__,
     getMcpToolCatalogEntries,
     getCliCommandCatalog,
+    isCliEntrypointModule,
     isNodeTestRunnerProcess,
     normalizeCommandLineArguments,
     parseRuntimeValue,

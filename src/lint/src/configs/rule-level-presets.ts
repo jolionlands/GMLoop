@@ -9,12 +9,11 @@ export const PERFORMANCE_OVERRIDE_RULE_IDS = Object.freeze([
     "gml/prefer-string-interpolation"
 ]);
 
-export type LintRulesetName = "recommended" | "feather" | "performance";
+export type LintRulesetName = "all" | "recommended" | "feather" | "performance";
 
 const RECOMMENDED_RULES: Readonly<Record<string, LintRuleLevel>> = Object.freeze({
     "gml/prefer-hoistable-loop-accessors": "warn",
     "gml/prefer-loop-invariant-expressions": "warn",
-    "gml/prefer-repeat-loops": "warn",
     "gml/prefer-struct-literal-assignments": "warn",
     "gml/prefer-array-push": "warn",
     "gml/prefer-compound-assignments": "warn",
@@ -24,8 +23,8 @@ const RECOMMENDED_RULES: Readonly<Record<string, LintRuleLevel>> = Object.freeze
     "gml/no-globalvar": "warn",
     "gml/no-empty-regions": "warn",
     "gml/no-empty-comments": "warn",
-    "gml/no-legacy-api": "warn",
     "gml/no-scientific-notation": "error",
+    "gml/no-unary-plus-on-identifier": "warn",
     "gml/no-unnecessary-string-interpolation": "warn",
     "gml/remove-default-comments": "warn",
     "gml/normalize-doc-comments": "warn",
@@ -40,8 +39,6 @@ const RECOMMENDED_RULES: Readonly<Record<string, LintRuleLevel>> = Object.freeze
     "gml/prefer-string-interpolation": "warn",
     "gml/optimize-math-expressions": "warn",
     "gml/require-argument-separators": "error",
-    "gml/normalize-data-structure-accessors": "warn",
-    "gml/require-trailing-optional-defaults": "warn",
     "gml/simplify-real-calls": "warn",
     "gml/no-negative-zero": "warn"
 });
@@ -49,9 +46,15 @@ const RECOMMENDED_RULES: Readonly<Record<string, LintRuleLevel>> = Object.freeze
 const RECOMMENDED_SAFE_FEATHER_RULES: Readonly<Record<`feather/${string}`, LintRuleLevel>> = Object.freeze({
     "feather/gm1003": "warn",
     "feather/gm1009": "warn",
+    "feather/gm1017": "warn",
+    "feather/gm1023": "warn",
+    "feather/gm1024": "warn",
+    "feather/gm1028": "warn",
     "feather/gm1033": "warn",
-    "feather/gm1051": "warn",
     "feather/gm1041": "warn",
+    "feather/gm1051": "warn",
+    "feather/gm1056": "warn",
+    "feather/gm2004": "warn",
     "feather/gm2007": "warn",
     "feather/gm2020": "warn"
 });
@@ -62,6 +65,11 @@ const FEATHER_RULES: Readonly<Record<`feather/${string}`, LintRuleLevel>> = Obje
         LintRuleLevel
     >
 );
+
+const ALL_RULES: Readonly<Record<string, LintRuleLevel>> = Object.freeze({
+    ...RECOMMENDED_RULES,
+    ...FEATHER_RULES
+});
 
 function createPerformanceRuleSet(): Readonly<Record<string, LintRuleLevel>> {
     const rules: Record<string, LintRuleLevel> = {
@@ -85,6 +93,7 @@ const PERFORMANCE_RULES = createPerformanceRuleSet();
 
 export const LINT_RULESET_NAMES: ReadonlyArray<LintRulesetName> = Object.freeze([
     "recommended",
+    "all",
     "feather",
     "performance"
 ]);
@@ -95,10 +104,12 @@ export const LINT_RULESET_RULE_LEVELS: Readonly<Record<LintRulesetName, Readonly
             ...RECOMMENDED_RULES,
             ...RECOMMENDED_SAFE_FEATHER_RULES
         }),
+        all: ALL_RULES,
         feather: FEATHER_RULES,
         performance: PERFORMANCE_RULES
     });
 
+export const ALL_RULE_LEVELS = ALL_RULES;
 export const RECOMMENDED_GML_RULE_LEVELS = RECOMMENDED_RULES;
 export const RECOMMENDED_SAFE_FEATHER_RULE_LEVELS = RECOMMENDED_SAFE_FEATHER_RULES;
 export const FEATHER_RULE_LEVELS = FEATHER_RULES;

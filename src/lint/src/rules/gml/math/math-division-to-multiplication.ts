@@ -1,13 +1,11 @@
 import { Core, type GameMakerAstNode, type MutableGameMakerAstNode } from "@gmloop/core";
 
 import { replaceNodeWith } from "./math-ast-builders.js";
+import { DEFAULT_MATH_NUMERIC_POLICY, type MathNumericPolicy } from "./math-numeric-policy.js";
 import { computeNumericTolerance } from "./math-numeric-utils.js";
 import { matchDegreesToRadians } from "./math-trig-conversions.js";
 
 const { BINARY_EXPRESSION, LITERAL, PARENTHESIZED_EXPRESSION } = Core;
-
-const MIN_SAFE_DIVISOR = 1e-10;
-const MAX_SAFE_RECIPROCAL = 1e10;
 
 type ParenthesizedExpressionNode = GameMakerAstNode & {
     expression?: GameMakerAstNode | null;
@@ -52,7 +50,7 @@ function extractReciprocalScalar(node: GameMakerAstNode | null | undefined): num
     return denominatorValue;
 }
 
-function getMultiplicationFactor(node: GameMakerAstNode | null | undefined): number | null {
+function getMultiplicationFactor(node: GameMakerAstNode | null | undefined, policy: MathNumericPolicy): number | null {
     if (Core.shouldSkipTraversal(node)) {
         return null;
     }
@@ -62,12 +60,12 @@ function getMultiplicationFactor(node: GameMakerAstNode | null | undefined): num
         // Use tolerance-aware comparison to detect values extremely close to zero
         // that might arise from floating-point rounding errors
         const tolerance = computeNumericTolerance(literalValue);
-        if (Math.abs(literalValue) <= Math.max(tolerance, MIN_SAFE_DIVISOR)) {
+        if (Math.abs(literalValue) <= Math.max(tolerance, policy.minSafeDivisor)) {
             return null;
         }
 
         const reciprocal = 1 / literalValue;
-        if (!Number.isFinite(reciprocal) || Math.abs(reciprocal) > MAX_SAFE_RECIPROCAL) {
+        if (!Number.isFinite(reciprocal) || Math.abs(reciprocal) > policy.maxSafeReciprocal) {
             return null;
         }
 
@@ -82,7 +80,7 @@ function getMultiplicationFactor(node: GameMakerAstNode | null | undefined): num
             return null;
         }
 
-        if (Math.abs(reciprocalScalar) > MAX_SAFE_RECIPROCAL) {
+        if (Math.abs(reciprocalScalar) > policy.maxSafeReciprocal) {
             return null;
         }
 
@@ -110,45 +108,48 @@ function formatMultiplierLiteral(multiplier: number): string | null {
 }
 
 function flattenMultiplicativeOperand(node: MutableGameMakerAstNode) {
+    // Walk down the paren chain looking for the innermost expression. We
+    // can only strip the redundant wrappers when:
+    //   - every wrapper is comment-free, and
+    //   - the innermost expression is a `*` BINARY_EXPRESSION (removing
+    //     parentheses around `+` or other lower-precedence operators
+    //     would change the meaning of the rewritten expression).
     const leftOperand = node.left as ParenthesizedExpressionNode | null;
-    if (!leftOperand || leftOperand.type !== PARENTHESIZED_EXPRESSION) {
-        return;
-    }
-
-    const wrappers: ParenthesizedExpressionNode[] = [];
-    let cursor = leftOperand;
-
-    while (cursor && cursor.type === PARENTHESIZED_EXPRESSION) {
-        wrappers.push(cursor);
-
-        const nested = cursor.expression;
-        if (!nested || nested.type !== PARENTHESIZED_EXPRESSION) {
-            break;
+    let innermost: GameMakerAstNode | null = null;
+    let current: ParenthesizedExpressionNode | null = leftOperand;
+    while (current && current.type === PARENTHESIZED_EXPRESSION) {
+        if (Core.hasComment(current)) {
+            return;
         }
-
-        cursor = nested;
+        const nested = current.expression;
+        if (nested?.type === PARENTHESIZED_EXPRESSION) {
+            current = nested;
+            continue;
+        }
+        if (!nested) {
+            return;
+        }
+        innermost = nested;
+        break;
     }
 
-    if (wrappers.length === 0 || !cursor) {
+    if (
+        !innermost ||
+        innermost.type !== BINARY_EXPRESSION ||
+        innermost.operator !== "*" ||
+        Core.hasComment(innermost)
+    ) {
         return;
     }
 
-    const innermost = cursor.expression;
-    if (!innermost || innermost.type !== BINARY_EXPRESSION || innermost.operator !== "*") {
-        return;
-    }
-
-    if (wrappers.some((wrapper) => Core.hasComment(wrapper)) || Core.hasComment(innermost)) {
-        return;
-    }
-
-    let current = node.left as ParenthesizedExpressionNode | null;
+    // Validation passed: walk the chain a second time, replacing each
+    // paren wrapper with its inner expression in place.
+    current = leftOperand;
     while (current && current.type === PARENTHESIZED_EXPRESSION) {
         const expression = current.expression;
         if (!expression || !replaceNodeWith(current, expression)) {
             break;
         }
-
         current = expression;
     }
 }
@@ -157,7 +158,7 @@ function flattenMultiplicativeOperand(node: MutableGameMakerAstNode) {
  * Converts division by a constant literal into multiplication by its reciprocal.
  * Example: `x / 2` -> `x * 0.5`
  */
-function attemptConvertDivisionToMultiplication(node: MutableGameMakerAstNode): boolean {
+function attemptConvertDivisionToMultiplication(node: MutableGameMakerAstNode, policy: MathNumericPolicy): boolean {
     if (node.type !== BINARY_EXPRESSION || node.operator !== "/") {
         return false;
     }
@@ -167,7 +168,7 @@ function attemptConvertDivisionToMultiplication(node: MutableGameMakerAstNode): 
     }
 
     const right = node.right;
-    const multiplier = getMultiplicationFactor(right);
+    const multiplier = getMultiplicationFactor(right, policy);
     if (multiplier === null) {
         return false;
     }
@@ -193,30 +194,27 @@ function attemptConvertDivisionToMultiplication(node: MutableGameMakerAstNode): 
 
 /**
  * Walk the AST and turn division-by-constant patterns into multiplications by the reciprocal.
+ *
+ * @param node - AST root (or subtree) to rewrite in place.
+ * @param policy - Optional numeric-safety policy override. When omitted, the
+ *   default thresholds from {@link DEFAULT_MATH_NUMERIC_POLICY} are used.
+ *   Supplying a tighter policy is useful in tests that exercise boundary
+ *   conditions; the lint rule and most consumers should rely on the default.
  */
-export function applyDivisionToMultiplication(node: MutableGameMakerAstNode) {
+export function applyDivisionToMultiplication(
+    node: MutableGameMakerAstNode,
+    policy: MathNumericPolicy = DEFAULT_MATH_NUMERIC_POLICY
+) {
     if (Core.shouldSkipTraversal(node)) {
         return;
     }
 
-    // Apply transform
-    attemptConvertDivisionToMultiplication(node);
-
-    // Recursively descend through the AST to find and transform all division
-    // operations. The depth-first traversal ensures child nodes are optimized
-    // before their parents, which is critical when a division expression contains
-    // nested divisions (e.g., `(x / 2) / 3` should become `x * 0.5 * 0.333...`).
-    for (const key of Object.keys(node)) {
-        // Skip parent references to avoid cycles
-        if (key === "parent") continue;
-
-        const child = (node as any)[key];
-        if (Array.isArray(child)) {
-            for (const item of child) {
-                applyDivisionToMultiplication(item);
-            }
-        } else if (child && typeof child === "object") {
-            applyDivisionToMultiplication(child);
-        }
-    }
+    // Apply transform to this node first, then descend into its children.
+    // Visiting the parent before its children matters when a division
+    // expression contains nested divisions (e.g., `(x / 2) / 3` should
+    // become `x * 0.5 * 0.333...` rather than `x / 2 * 0.333...`).
+    attemptConvertDivisionToMultiplication(node, policy);
+    Core.visitNonTraversalChildValues(node, (child) =>
+        applyDivisionToMultiplication(child as MutableGameMakerAstNode, policy)
+    );
 }

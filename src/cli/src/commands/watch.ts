@@ -25,13 +25,12 @@ import path from "node:path";
 import process from "node:process";
 
 import { Core, type DebouncedFunction } from "@gmloop/core";
-import { Parser } from "@gmloop/parser";
 import { Transpiler } from "@gmloop/transpiler";
 import { Command, Option } from "commander";
 
 import { createMinimumValueValidator, portValidator } from "../cli-core/command-parsing.js";
 import { applyStandardCommandOptions } from "../cli-core/command-standard-options.js";
-import { formatCliError } from "../cli-core/errors.js";
+import { formatCliError, handleCliError } from "../cli-core/errors.js";
 import { createStatusUrl, createWebSocketUrl, DEFAULT_GM_TEMP_ROOT } from "../modules/live-reload/config.js";
 import { prepareLiveReload } from "../modules/live-reload/session.js";
 import {
@@ -49,8 +48,11 @@ import {
 import { startStatusServer, type StatusServerHandle, type StatusServerLifecycle } from "../modules/status/server.js";
 import { DependencyTracker } from "../modules/transpilation/dependency-tracker.js";
 import {
+    createGmlParserAdapter,
+    createGmlTranspilerAdapter,
     displayTranspilationStatistics,
     type ErrorCollector,
+    type GmlParserAdapter,
     type MetricsCollector,
     orderPatchesForReplay,
     type PatchBroadcastService,
@@ -102,6 +104,20 @@ type WatchFactory = (
     listener?: WatchListener<string>
 ) => FSWatcher;
 
+/**
+ * Sentinel no-op used as the initial value for `removeAbortListener` in the
+ * watch command's teardown path. The watch loop always invokes
+ * `removeAbortListener()` during shutdown to detach the optional
+ * caller-supplied `AbortSignal` listener, but that listener only exists when
+ * `abortSignal` was provided. Using this sentinel means the teardown code
+ * never needs to branch on "was a listener registered?" — the slot is always
+ * safely callable. Replacing the variable with the real teardown (in the
+ * `abortSignal` branch) hands the cleanup path a function that actually
+ * detaches the listener; resetting it back to this sentinel after detachment
+ * keeps subsequent calls safe if teardown ever runs twice. Do not delete this
+ * declaration without also reworking the teardown branch in the abort-handler
+ * block, or every shutdown that lacks an abort signal will throw.
+ */
 const noopAbortListener = () => {};
 
 /**
@@ -400,9 +416,7 @@ async function runAutoInjectHotReload(
         const message = getErrorMessage(error, {
             fallback: "Unknown hot-reload injection error"
         });
-        const formattedError = formatCliError(new Error(`Failed to prepare hot-reload injection: ${message}`));
-        console.error(formattedError);
-        process.exit(1);
+        handleCliError(new Error(`Failed to prepare hot-reload injection: ${message}`));
     }
 }
 
@@ -666,16 +680,13 @@ async function validateTargetPath(targetPath: string): Promise<string> {
     try {
         const stats = await stat(normalizedPath);
         if (!stats.isDirectory()) {
-            console.error(`${normalizedPath} is not a directory`);
-            process.exit(1);
+            handleCliError(`${normalizedPath} is not a directory`);
         }
     } catch (error) {
         const message = getErrorMessage(error, {
             fallback: "Cannot access path"
         });
-        const formattedError = formatCliError(new Error(`Cannot access ${normalizedPath}: ${message}`));
-        console.error(formattedError);
-        process.exit(1);
+        handleCliError(new Error(`Cannot access ${normalizedPath}: ${message}`));
     }
 
     return normalizedPath;
@@ -767,8 +778,6 @@ async function startWatchRuntimeServerAfterPatchServers({
         const message = getErrorMessage(error, {
             fallback: "Unknown runtime server error"
         });
-        const formattedError = formatCliError(new Error(`Failed to start runtime static server: ${message}`));
-        console.error(formattedError);
 
         await stopServerAfterStartupFailure(
             "WebSocket server",
@@ -777,7 +786,7 @@ async function startWatchRuntimeServerAfterPatchServers({
         );
         await stopServerAfterStartupFailure("status server", statusServerController, unknownServerStopErrorMessage);
 
-        process.exit(1);
+        handleCliError(new Error(`Failed to start runtime static server: ${message}`));
     }
 }
 
@@ -833,8 +842,7 @@ export async function runWatchCommand(targetPath: string, options: WatchCommandO
 
     // Validate that verbose and quiet are not both enabled
     if (verbose && quiet) {
-        console.error("Error: --verbose and --quiet cannot be used together");
-        process.exit(1);
+        handleCliError("Error: --verbose and --quiet cannot be used together");
     }
 
     const normalizedPath = await validateTargetPath(targetPath);
@@ -856,7 +864,7 @@ export async function runWatchCommand(targetPath: string, options: WatchCommandO
     const shouldServeRuntime = hydrateRuntime === undefined ? runtimeServer !== false : Boolean(hydrateRuntime);
 
     const semanticOracle = Transpiler.createSemanticOracle({ scriptNames });
-    const transpiler = new Transpiler.GmlTranspiler({
+    const transpiler = createGmlTranspilerAdapter({
         semantic: semanticOracle
     });
     const dependencyTracker = new DependencyTracker();
@@ -947,10 +955,7 @@ export async function runWatchCommand(targetPath: string, options: WatchCommandO
             const message = getErrorMessage(error, {
                 fallback: "Unknown WebSocket server error"
             });
-            const formattedError = formatCliError(new Error(`Failed to start WebSocket server: ${message}`));
-            console.error(formattedError);
-
-            process.exit(1);
+            handleCliError(new Error(`Failed to start WebSocket server: ${message}`));
         }
     } else if (verbose && !quiet) {
         console.log("WebSocket patch server disabled.");
@@ -999,8 +1004,6 @@ export async function runWatchCommand(targetPath: string, options: WatchCommandO
             const message = getErrorMessage(error, {
                 fallback: "Unknown status server error"
             });
-            const formattedError = formatCliError(new Error(`Failed to start status server: ${message}`));
-            console.error(formattedError);
 
             if (websocketServerController) {
                 try {
@@ -1013,7 +1016,7 @@ export async function runWatchCommand(targetPath: string, options: WatchCommandO
                 }
             }
 
-            process.exit(1);
+            handleCliError(new Error(`Failed to start status server: ${message}`));
         }
     } else if (verbose && !quiet) {
         console.log("Status server disabled.");
@@ -1197,8 +1200,7 @@ export async function runWatchCommand(targetPath: string, options: WatchCommandO
                 const message = getErrorMessage(error, {
                     fallback: "Unknown cleanup error"
                 });
-                console.error(`Error during watch cleanup: ${message}`);
-                process.exit(1);
+                handleCliError(`Error during watch cleanup: ${message}`);
             });
         };
 
@@ -2113,19 +2115,17 @@ async function collectWatchedFilePaths(
 async function addScriptNamesFromFile(
     filePath: string,
     scriptNames: Set<string>,
-    fileDataCache: Map<string, InitialFileData>
+    fileDataCache: Map<string, InitialFileData>,
+    parseAdapter: GmlParserAdapter = createGmlParserAdapter()
 ): Promise<void> {
     const beforeSize = scriptNames.size;
 
     try {
         const content = await readFile(filePath, "utf8");
-        const parser = new Parser.GMLParser(content, {
-            getComments: false,
-            getLocations: true,
-            simplifyLocations: true,
-            attachFunctionDocComments: false
-        });
-        const ast = parser.parse();
+        // Use the dependency-inverted parser adapter seam rather than
+        // `new Parser.GMLParser(...)` so tests/embedders can swap in a stub
+        // parser without monkey-patching the @gmloop/parser namespace.
+        const ast = parseAdapter(content);
         // Extract both symbols and references from the AST in a single traversal.
         // This saves a second walk during transpileFile when the cache is reused.
         const symbols = extractSymbolsFromAst(ast, filePath);

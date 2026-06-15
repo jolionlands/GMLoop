@@ -6,6 +6,7 @@ import type {
     GraphVisualizationLoadedTarget,
     GraphVisualizationMcpServerStatus,
     GraphVisualizationProjectConfigurationCatalog,
+    GraphVisualizationProjectWorkflow,
     GraphVisualizationRenderOptions,
     GraphVisualizationStartupState
 } from "../graph/types.js";
@@ -21,6 +22,7 @@ export type GraphVisualizationFixProgressSnapshot = Readonly<{
 
 export type GraphVisualizationFixRunOptions = Readonly<{
     onProgress: (progress: GraphVisualizationFixProgressSnapshot) => void;
+    workflow: GraphVisualizationProjectWorkflow;
 }>;
 
 export type GraphVisualizationHostMutationResult = Readonly<{
@@ -55,7 +57,7 @@ export type GraphVisualizationUiCallbacks = Readonly<{
     onCreateConfig?: () => void | Promise<void>;
     onSaveConfig: (config: Readonly<Record<string, unknown>>) => void | Promise<void>;
     onRunFix: (
-        options?: GraphVisualizationFixRunOptions
+        options: GraphVisualizationFixRunOptions
     ) => GraphVisualizationFixRunResult | Promise<GraphVisualizationFixRunResult>;
     onStartLiveReload: () =>
         | GraphVisualizationLiveReloadModel
